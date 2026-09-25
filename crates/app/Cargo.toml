@@ -1,0 +1,21 @@
+[package]
+name = "steroidsoundboard"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+steroid-engine = { path = "../engine" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "signal"] }
+axum = { version = "0.8", features = ["ws"] }
+futures-util = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rust-embed = "8"
+mime_guess = "2"
+webbrowser = "1"
+dirs = "5"
+anyhow = "1"
+log = "0.4"
+env_logger = "0.11"
+local-ip-address = "0.6"

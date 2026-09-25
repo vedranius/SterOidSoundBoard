@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>SterOidSoundBoard</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <strong class="logo">SterOidSoundBoard</strong><span id="ver" class="dim"></span>
+  <div id="status" class="status">audio: —</div>
+  <div class="meters-top">
+    <span class="dim">IN</span><div class="m"><i id="mInL"></i></div><div class="m"><i id="mInR"></i></div>
+    <span class="dim">OUT</span><div class="m"><i id="mOutL"></i></div><div class="m"><i id="mOutR"></i></div>
+    <span class="dim">DSP</span><span id="load">0%</span><span class="dim">xruns</span><span id="xruns">0</span>
+  </div>
+  <button id="btnAudio">Audio</button>
+</header>
+
+<section id="audioPanel" class="panel hidden">
+  <label>Driver <select id="selHost"></select></label>
+  <label>Input <select id="selIn"></select></label>
+  <label>Output <select id="selOut"></select></label>
+  <label>Buffer <select id="selBuf">
+    <option value="">default</option><option>32</option><option>64</option><option>128</option>
+    <option>256</option><option>512</option><option>1024</option></select></label>
+  <label class="chk"><input type="checkbox" id="chkNoIn"> no input</label>
+  <button id="btnStart">Start</button><button id="btnStop">Stop</button>
+  <div id="audioErr" class="err"></div>
+</section>
+
+<main>
+  <aside id="palette"><div class="dim small">Tap to add</div></aside>
+  <div id="board">
+    <svg id="cables"></svg>
+    <div class="io in" id="io-in"><span>IN</span><b class="port out" data-node="in"></b></div>
+    <div class="io out" id="io-out"><b class="port in" data-node="out"></b><span>OUT</span></div>
+  </div>
+</main>
+<div id="toast"></div>
+<script src="app.js"></script>
+</body>
+</html>

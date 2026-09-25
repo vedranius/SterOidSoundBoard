@@ -1,0 +1,19 @@
+# Headless autostart (Raspberry Pi / Linux box).
+# Install:  sudo cp steroidsoundboard /usr/local/bin/ && sudo cp steroidsoundboard.service /etc/systemd/system/
+#           sudo systemctl enable --now steroidsoundboard
+[Unit]
+Description=SterOidSoundBoard real-time audio engine
+After=network-online.target sound.target
+Wants=network-online.target
+
+[Service]
+User=pi
+ExecStart=/usr/local/bin/steroidsoundboard --headless
+Restart=always
+RestartSec=2
+LimitRTPRIO=95
+LimitMEMLOCK=infinity
+Nice=-10
+
+[Install]
+WantedBy=multi-user.target
