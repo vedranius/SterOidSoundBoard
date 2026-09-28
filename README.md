@@ -3,7 +3,7 @@
 Real-time audio effects host for Linux, Windows and Raspberry Pi, controlled from any browser
 (desktop, tablet, phone). Inspired by MOD Desktop and Patchbox OS, rebuilt from scratch.
 
-**Status:** 0.2.0 — Music + DigiLingua modes on one engine. See [CHANGELOG](CHANGELOG.md) and the roadmap below.
+**Status:** 0.3.0 — Music + DigiLingua modes on one engine, AI opinion for clinicians. See [CHANGELOG](CHANGELOG.md) and the roadmap below.
 
 ## Two modes, one engine
 
@@ -19,7 +19,13 @@ and a musician can use any clinical node (31-band EQ, DAF, pitch shift, noise, i
 **DigiLingua features:** patients and therapy sessions (timer, notes, settings snapshot),
 31-band ISO EQ, DAF (0–5 s, no echo), FAF (±12 st), masking noise (white/pink/brown/narrow-band,
 per ear), discontinuity filter, mic channel selection and per-ear volume, live sonagram + VU,
-lossless WAV recording, and voice analysis (F0, jitter, shimmer, HNR) with a clinical report.
+lossless WAV recording, voice analysis (F0, jitter, shimmer, HNR, pauses, speech rate, phonation
+time) with a clinical report, full patient profiles, and an **AI opinion** for the rehabilitator.
+
+**AI (optional, your own key):** Anthropic Claude (default `claude-opus-5`), any OpenAI-compatible
+API, or local Ollama. The AI gets measurements, a pseudonymised profile (no name, code or birth
+date), the task, your observations and optionally the sonagram image — never the audio. It needs the
+patient's recorded consent. Configure it with the **AI** button in the header.
 Open it directly with `http://<host>:8420/#digilingua`.
 
 > Patient data stays on the machine (`clinic.json`, `recordings/` in the data directory).
@@ -61,16 +67,18 @@ cargo build --release
 
 ## Data directory
 Linux `~/.local/share/SterOidSoundBoard`, Windows `%APPDATA%\SterOidSoundBoard`:
-`boards/default.json` (autosave), `presets/`, `recordings/*.wav`, `clinic.json`, `audio.json`.
+`boards/default.json` (autosave), `presets/`, `recordings/*.wav`, `clinic.json` (patients, sessions,
+recordings, AI opinions), `ai.json` (AI provider + key, owner-only), `audio.json`.
 
 ## Roadmap
 - **0.2** ✅ DigiLingua mode, clinical nodes, recording, voice analysis, presets
-- **0.3** native duplex backends (JACK/PipeWire, ASIO), Pisound support, state-preserving graph edits, PIN/login
-- **0.4** LV2 plugin hosting + plugin manager (open-source plugin catalog)
-- **0.5** Control-surface designer (custom tablet layouts), MIDI learn, OSC
-- **0.6** AI Lab: describe an effect → Faust DSP generated, compiled (JIT) and loaded live
+- **0.3** ✅ patient profiles, fluency measures, AI opinion (Claude / OpenAI-compatible / Ollama)
+- **0.4** PIN/login, native duplex backends (JACK/PipeWire, ASIO), Pisound support, state-preserving graph edits, PIN/login
+- **0.5** LV2 plugin hosting + plugin manager (open-source plugin catalog)
+- **0.6** Control-surface designer (custom tablet layouts), MIDI learn, OSC
+- **0.7** AI Lab: describe an effect → Faust DSP generated, compiled (JIT) and loaded live
   (Claude / OpenAI-compatible / Ollama, user's choice)
-- **0.7** Raspberry Pi image, snapshots, DigiLingua exercise protocols and progress charts
+- **0.8** Raspberry Pi image, snapshots, DigiLingua exercise protocols and progress charts
 
 ## License
 GPL-3.0-or-later

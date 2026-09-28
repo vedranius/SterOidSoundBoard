@@ -1,7 +1,7 @@
 use crate::clinic::{self, Patient, PatientIn};
 use crate::state::App;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::{Path, Query, State};
+use axum::extract::{DefaultBodyLimit, Path, Query, State};
 use axum::http::{header, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post, put};
@@ -52,6 +52,11 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/recordings/{id}", put(update_recording).delete(delete_recording))
         .route("/api/recordings/{id}/wav", get(recording_wav))
         .route("/api/recordings/{id}/analyze", post(analyze))
+        .route("/api/ai/config", get(ai_config).put(set_ai_config))
+        .route("/api/ai/test", post(ai_test))
+        .route("/api/recordings/{id}/ai/preview", post(ai_preview).layer(DefaultBodyLimit::max(12 << 20)))
+        .route("/api/recordings/{id}/ai", get(ai_list).post(ai_run).layer(DefaultBodyLimit::max(12 << 20)))
+        .route("/api/ai-reports/{id}", delete(ai_delete))
         .route("/ws", get(ws))
         .fallback(static_file)
         .with_state(app)
@@ -184,10 +189,10 @@ async fn list_patients(State(app): S) -> Json<Vec<Patient>> {
 
 fn check_patient(p: &PatientIn) -> Result<(), &'static str> {
     if p.name.trim().is_empty() {
-        return Err("name is required");
+        return Err("ime je obavezno");
     }
-    if p.name.len() > 200 || p.code.len() > 100 || p.birth.len() > 40 || p.notes.len() > 20_000 {
-        return Err("field too long");
+    if p.text_fields().iter().any(|(v, max)| v.len() > *max) {
+        return Err("predugačak unos");
     }
     Ok(())
 }
@@ -290,11 +295,14 @@ struct RecStart {
     source: String,
     #[serde(default)]
     label: String,
+    #[serde(default)]
+    task: String,
 }
 
 async fn record_start(State(app): S, Json(b): Json<RecStart>) -> Response {
     let label: String = b.label.chars().take(200).collect();
-    match tokio::task::spawn_blocking(move || app.start_recording(b.patient_id, &b.source, label)).await {
+    let task: String = b.task.chars().take(200).collect();
+    match tokio::task::spawn_blocking(move || app.start_recording(b.patient_id, &b.source, label, task)).await {
         Ok(r) => done(r),
         Err(e) => err(e),
     }
@@ -316,10 +324,25 @@ async fn list_recordings(State(app): S, Query(q): Query<ByPatient>) -> Json<Valu
     Json(json!(v))
 }
 
-async fn update_recording(State(app): S, Path(id): Path<String>, Json(n): Json<Named>) -> Response {
+#[derive(Deserialize)]
+struct RecordingEdit {
+    label: Option<String>,
+    task: Option<String>,
+    notes: Option<String>,
+}
+
+async fn update_recording(State(app): S, Path(id): Path<String>, Json(e): Json<RecordingEdit>) -> Response {
     let mut c = app.clinic.lock().unwrap();
     let Some(r) = c.recordings.iter_mut().find(|r| r.id == id) else { return err("no such recording") };
-    r.label = n.name.chars().take(200).collect();
+    if let Some(v) = e.label {
+        r.label = v.chars().take(200).collect();
+    }
+    if let Some(v) = e.task {
+        r.task = v.chars().take(200).collect();
+    }
+    if let Some(v) = e.notes {
+        r.notes = v.chars().take(20_000).collect();
+    }
     done(app.save_clinic(&c))
 }
 
@@ -367,6 +390,125 @@ async fn analyze(State(app): S, Path(id): Path<String>, body: Option<Json<Range>
         Ok(Err(e)) => err(e),
         Err(e) => err(e),
     }
+}
+
+// ------------------------------------------------------------- AI opinion
+async fn ai_config(State(app): S) -> Json<Value> {
+    Json(app.ai.lock().unwrap().public())
+}
+
+#[derive(Deserialize)]
+struct AiConfigIn {
+    provider: String,
+    #[serde(default)]
+    base_url: String,
+    #[serde(default)]
+    model: String,
+    /// New key; omitted or empty keeps the stored one.
+    #[serde(default)]
+    api_key: Option<String>,
+    #[serde(default)]
+    clear_key: bool,
+    #[serde(default = "yes")]
+    send_image: bool,
+}
+fn yes() -> bool {
+    true
+}
+
+async fn set_ai_config(State(app): S, Json(b): Json<AiConfigIn>) -> Response {
+    if !matches!(b.provider.as_str(), "anthropic" | "openai" | "ollama") {
+        return err("nepoznat AI servis");
+    }
+    let base = b.base_url.trim();
+    if !base.is_empty() && !(base.starts_with("https://") || base.starts_with("http://")) {
+        return err("adresa mora počinjati s http:// ili https://");
+    }
+    let mut cfg = app.ai.lock().unwrap();
+    let provider_changed = cfg.provider != b.provider;
+    cfg.provider = b.provider;
+    cfg.base_url = base.chars().take(500).collect();
+    cfg.model = b.model.trim().chars().take(200).collect();
+    cfg.send_image = b.send_image;
+    if b.clear_key || provider_changed {
+        cfg.api_key.clear(); // a key never silently follows a switch to another service
+    }
+    if let Some(k) = b.api_key.map(|k| k.trim().to_string()).filter(|k| !k.is_empty()) {
+        cfg.api_key = k.chars().take(1000).collect();
+    }
+    match cfg.save(&app.paths.ai) {
+        Ok(()) => Json(cfg.public()).into_response(),
+        Err(e) => err(e),
+    }
+}
+
+async fn ai_test(State(app): S) -> Response {
+    let cfg = app.ai.lock().unwrap().clone();
+    match tokio::task::spawn_blocking(move || crate::ai::test(&cfg)).await {
+        Ok(Ok(a)) => Json(json!({"ok": true, "model": a.model, "text": a.text.chars().take(200).collect::<String>()})).into_response(),
+        Ok(Err(e)) => err(e),
+        Err(e) => err(e),
+    }
+}
+
+#[derive(Deserialize, Default)]
+struct AiReq {
+    start: Option<f32>,
+    end: Option<f32>,
+    #[serde(default)]
+    question: String,
+    /// Sonagram as a JPEG/PNG data URL.
+    #[serde(default)]
+    image: Option<String>,
+}
+
+async fn ai_preview(State(app): S, Path(id): Path<String>, Json(b): Json<AiReq>) -> Response {
+    let q: String = b.question.chars().take(4000).collect();
+    let r = tokio::task::spawn_blocking(move || app.ai_job(&id, b.start, b.end, &q, b.image.as_deref())).await;
+    match r {
+        Ok(Ok(j)) => Json(json!({
+            "provider": j.cfg.provider_name(),
+            "url": j.cfg.base(),
+            "model": j.cfg.model,
+            "image": j.image.is_some(),
+            "system": j.system,
+            "user": j.user,
+        }))
+        .into_response(),
+        Ok(Err(e)) => err(e),
+        Err(e) => err(e),
+    }
+}
+
+async fn ai_run(State(app): S, Path(id): Path<String>, Json(b): Json<AiReq>) -> Response {
+    let q: String = b.question.chars().take(4000).collect();
+    let r = tokio::task::spawn_blocking(move || {
+        let job = app.ai_job(&id, b.start, b.end, &q, b.image.as_deref())?;
+        app.ai_run(job, &q)
+    })
+    .await;
+    match r {
+        Ok(Ok(rep)) => Json(rep).into_response(),
+        Ok(Err(e)) => err(e),
+        Err(e) => err(e),
+    }
+}
+
+async fn ai_list(State(app): S, Path(id): Path<String>) -> Json<Value> {
+    let c = app.clinic.lock().unwrap();
+    let mut v: Vec<&clinic::AiReport> = c.ai_reports.iter().filter(|a| a.recording_id == id).collect();
+    v.sort_by_key(|a| std::cmp::Reverse(a.created));
+    Json(json!(v))
+}
+
+async fn ai_delete(State(app): S, Path(id): Path<String>) -> Response {
+    let mut c = app.clinic.lock().unwrap();
+    let before = c.ai_reports.len();
+    c.ai_reports.retain(|a| a.id != id);
+    if c.ai_reports.len() == before {
+        return err("no such AI report");
+    }
+    done(app.save_clinic(&c))
 }
 
 // ------------------------------------------------------------- WebSocket

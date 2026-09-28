@@ -44,6 +44,24 @@ pub struct VoiceReport {
     /// RMS level of voiced frames, dBFS.
     pub intensity_dbfs: Option<f32>,
     pub periods: usize,
+    /// F0 range between the 5th and 95th percentile, semitones.
+    pub f0_range_st: Option<f32>,
+    /// Longest continuous voiced stretch, s (maximum phonation time on a sustained vowel).
+    pub max_voiced_s: f32,
+    /// Unvoiced gaps between voiced stretches, and their share of the voiced span (%).
+    pub voice_breaks: usize,
+    pub voice_break_degree: f32,
+    /// Silent pauses ≥ 250 ms inside the utterance.
+    pub pauses: usize,
+    pub pause_mean_s: f32,
+    /// Share of the utterance spent in silent pauses, %.
+    pub pause_ratio: f32,
+    /// Syllable nuclei (intensity peaks in voiced frames, de Jong & Wempe 2009).
+    pub syllable_nuclei: usize,
+    /// Nuclei per second of the whole utterance (incl. pauses).
+    pub speech_rate: f32,
+    /// Nuclei per second of speaking time (pauses excluded).
+    pub articulation_rate: f32,
     /// [time s, f0 Hz or 0 when unvoiced] every 10 ms.
     pub pitch: Vec<[f32; 2]>,
     /// True if every measured parameter is inside the reference range.
@@ -274,8 +292,88 @@ pub fn analyze(x: &[f32], sr: f32) -> VoiceReport {
             }
         }
     }
+    temporal(&mut rep, &frames, hop);
     write_report(&mut rep);
     rep
+}
+
+const PAUSE_MIN_S: f32 = 0.25;
+const SILENCE_BELOW_PEAK_DB: f32 = 25.0;
+const NUCLEUS_DIP_DB: f32 = 2.0;
+
+/// Timing and prosody measures used for fluency (stuttering, cluttering)
+/// and connected speech. Intensity comes from the pitch-track frames.
+fn temporal(r: &mut VoiceReport, frames: &[Frame], hop: f32) {
+    if frames.is_empty() {
+        return;
+    }
+    let voiced: Vec<bool> = frames.iter().map(|f| f.f0 > 0.0).collect();
+    // voicing: longest run, breaks inside the voiced span
+    let (mut best, mut run) = (0usize, 0usize);
+    for &v in &voiced {
+        run = if v { run + 1 } else { 0 };
+        best = best.max(run);
+    }
+    r.max_voiced_s = best as f32 * hop;
+    if let (Some(a), Some(b)) = (voiced.iter().position(|&v| v), voiced.iter().rposition(|&v| v)) {
+        let span = &voiced[a..=b];
+        r.voice_breaks = span.windows(2).filter(|w| w[0] && !w[1]).count();
+        r.voice_break_degree = span.iter().filter(|&&v| !v).count() as f32 / span.len() as f32 * 100.0;
+    }
+    let mut f0: Vec<f32> = frames.iter().map(|f| f.f0).filter(|&f| f > 0.0).collect();
+    if f0.len() >= 10 {
+        f0.sort_by(f32::total_cmp);
+        let q = |p: f32| f0[((f0.len() - 1) as f32 * p) as usize];
+        r.f0_range_st = Some(12.0 * (q(0.95) / q(0.05)).log2());
+    }
+    // intensity: sounding vs silent frames relative to the loud end of the recording
+    let db: Vec<f32> = frames.iter().map(|f| 20.0 * (f.rms + 1e-9).log10()).collect();
+    let mut sorted = db.clone();
+    sorted.sort_by(f32::total_cmp);
+    let q99 = sorted[((sorted.len() - 1) as f32 * 0.99) as usize];
+    let thr = (q99 - SILENCE_BELOW_PEAK_DB).max(-70.0);
+    let sounding: Vec<bool> = db.iter().map(|&d| d > thr).collect();
+    let (Some(a), Some(b)) = (sounding.iter().position(|&v| v), sounding.iter().rposition(|&v| v)) else { return };
+    let span_s = (b - a + 1) as f32 * hop;
+    let min_frames = (PAUSE_MIN_S / hop).ceil() as usize;
+    let (mut pauses, mut pause_frames, mut i) = (0usize, 0usize, a);
+    while i <= b {
+        if sounding[i] {
+            i += 1;
+            continue;
+        }
+        let j = (i..=b).find(|&k| sounding[k]).unwrap_or(b + 1);
+        if j - i >= min_frames {
+            pauses += 1;
+            pause_frames += j - i;
+        }
+        i = j;
+    }
+    r.pauses = pauses;
+    r.pause_mean_s = if pauses > 0 { pause_frames as f32 * hop / pauses as f32 } else { 0.0 };
+    r.pause_ratio = pause_frames as f32 * hop / span_s * 100.0;
+    // syllable nuclei: voiced intensity peaks separated by dips of ≥ 2 dB
+    let mut kept: Vec<usize> = vec![];
+    for k in (a + 1)..b {
+        if !(db[k] >= db[k - 1] && db[k] > db[k + 1] && sounding[k] && voiced[k]) {
+            continue;
+        }
+        match kept.last().copied() {
+            None => kept.push(k),
+            Some(last) => {
+                let dip = db[last..=k].iter().copied().fold(f32::MAX, f32::min);
+                if db[k] - dip >= NUCLEUS_DIP_DB && db[last] - dip >= NUCLEUS_DIP_DB {
+                    kept.push(k);
+                } else if db[k] > db[last] {
+                    *kept.last_mut().unwrap() = k; // same syllable, higher peak
+                }
+            }
+        }
+    }
+    r.syllable_nuclei = kept.len();
+    r.speech_rate = kept.len() as f32 / span_s;
+    let speaking = span_s - pause_frames as f32 * hop;
+    r.articulation_rate = if speaking > 0.0 { kept.len() as f32 / speaking } else { 0.0 };
 }
 
 fn write_report(r: &mut VoiceReport) {
@@ -296,6 +394,16 @@ fn write_report(r: &mut VoiceReport) {
     let _ = writeln!(s, "➤ HNR (harmoničnost): {} dB   [norma > {HNR_MIN} dB]", o(r.hnr_db, 1));
     let _ = writeln!(s, "➤ Intenzitet (zvučni dio): {} dBFS", o(r.intensity_dbfs, 1));
     let _ = writeln!(s, "➤ Broj analiziranih perioda: {}", r.periods);
+    s.push_str("\nVREMENSKI I PROZODIJSKI PARAMETRI:\n");
+    let _ = writeln!(s, "➤ Raspon F0 (5.–95. percentil): {} polutonova", o(r.f0_range_st, 1));
+    let _ = writeln!(s, "➤ Najduža neprekinuta fonacija: {:.2} s", r.max_voiced_s);
+    let _ = writeln!(s, "➤ Prekidi zvučnosti: {} (udio {:.1} %)", r.voice_breaks, r.voice_break_degree);
+    let _ = writeln!(s, "➤ Pauze ≥ 250 ms: {} (prosjek {:.2} s, {:.1} % trajanja)", r.pauses, r.pause_mean_s, r.pause_ratio);
+    let _ = writeln!(
+        s,
+        "➤ Slogovne jezgre: {} · brzina govora {:.2} slog/s · brzina artikulacije {:.2} slog/s",
+        r.syllable_nuclei, r.speech_rate, r.articulation_rate
+    );
 
     let mut f = vec![];
     let mut bad = false;
@@ -416,6 +524,38 @@ mod tests {
         let clean = analyze(&voice(1.5, 120.0, 0.0, 0.0, 0.0), SR).hnr_db.unwrap();
         let noisy = analyze(&voice(1.5, 120.0, 0.0, 0.0, 0.15), SR).hnr_db.unwrap();
         assert!(noisy < clean - 8.0, "clean {clean} noisy {noisy}");
+    }
+
+    #[test]
+    fn pauses_and_syllable_rate() {
+        // 1 s voice, 0.6 s silence, 1 s voice at 4 syllables/s (deep 4 Hz AM)
+        let v = voice(1.0, 130.0, 0.0, 0.0, 0.0);
+        let mut x = v.clone();
+        x.extend(std::iter::repeat_n(0.0, (0.6 * SR) as usize));
+        x.extend(v.iter().enumerate().map(|(i, s)| s * (0.5 - 0.5 * (2.0 * PI * 4.0 * i as f32 / SR).cos())));
+        let r = analyze(&x, SR);
+        assert_eq!(r.pauses, 1, "{}", r.report);
+        assert!((r.pause_mean_s - 0.6).abs() < 0.08, "pause {}", r.pause_mean_s);
+        assert!((r.max_voiced_s - 1.0).abs() < 0.1, "mpt {}", r.max_voiced_s);
+        // second second holds 4 nuclei, first second a steady vowel (1 nucleus)
+        assert!((4..=6).contains(&r.syllable_nuclei), "nuclei {}", r.syllable_nuclei);
+        assert!(r.report.contains("Pauze"));
+    }
+
+    #[test]
+    fn f0_range_in_semitones() {
+        // glide 100 -> 200 Hz is one octave = 12 st; 5-95 % percentiles give ~10.8
+        let n = (2.0 * SR) as usize;
+        let mut ph = 0.0f32;
+        let x: Vec<f32> = (0..n)
+            .map(|i| {
+                let f = 100.0 * 2f32.powf(i as f32 / n as f32);
+                ph += 2.0 * PI * f / SR;
+                (1..=8).map(|h| (h as f32 * ph).cos() / h as f32).sum::<f32>() * 0.2
+            })
+            .collect();
+        let st = analyze(&x, SR).f0_range_st.unwrap();
+        assert!((9.5..12.5).contains(&st), "{st}");
     }
 
     #[test]

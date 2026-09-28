@@ -15,6 +15,14 @@ const EQ_PRESETS = {
   "Visoki": FREQS.map((f) => (f >= 8000 ? 8 : f >= 4000 ? 4 : 0)),
 };
 
+const TASKS = ["Produženi vokal /a/", "Produženi vokal /i/", "Produženi vokal /u/", "Čitanje standardnog teksta", "Spontani govor", "Brojanje / automatizirani govor", "Ponavljanje rečenica", "Glasovni raspon / glisando", "Pjevanje", "Ostalo"];
+function fillTasks(sel, cur) {
+  sel.innerHTML = ""; sel.add(new Option("— zadatak —", ""));
+  TASKS.forEach((t) => sel.add(new Option(t, t)));
+  if (cur && !TASKS.includes(cur)) sel.add(new Option(cur, cur));
+  sel.value = cur || "";
+}
+fillTasks($("#clRecTask"), TASKS[0]);
 const st = {
   patients: [], patient: null, sessions: [], active: null, recs: [], tab: "rehab",
   recording: false, mutedByTab: false, visible: false,
@@ -41,32 +49,53 @@ async function loadPatients(keep) {
 $("#clPatient").onchange = async () => {
   st.patient = st.patients.find((p) => p.id === $("#clPatient").value) || null;
   try { localStorage.setItem("ssb.patient", st.patient ? st.patient.id : ""); } catch (_) {}
-  $("#clPForm").classList.add("hidden");
   await loadPatientData();
 };
-function openForm(p) {
-  const f = $("#clPForm"); f.classList.remove("hidden"); f.dataset.id = p ? p.id : "";
-  f.name.value = p?.name || ""; f.code.value = p?.code || ""; f.birth.value = p?.birth || ""; f.notes.value = p?.notes || "";
-  $("#clPDel").classList.toggle("hidden", !p); f.name.focus();
+const P_FIELDS = ["name", "code", "birth", "sex", "language", "smoking", "diagnosis", "complaint", "history", "medical", "medications", "voice_use", "hearing", "goals", "notes"];
+function ageOf(birth, at = Date.now()) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(birth || ""); if (!m) return null;
+  const d = new Date(at); let a = d.getFullYear() - +m[1];
+  if (d.getMonth() + 1 < +m[2] || (d.getMonth() + 1 === +m[2] && d.getDate() < +m[3])) a--;
+  return a >= 0 && a <= 130 ? a : null;
 }
+function openForm(p) {
+  const f = $("#clPForm"); f.dataset.id = p ? p.id : "";
+  P_FIELDS.forEach((k) => (f[k].value = p?.[k] || ""));
+  f.ai_consent.checked = !!p?.ai_consent;
+  $("#pTitle").textContent = p ? "Pacijent — uredi" : "Novi pacijent";
+  $("#clPDel").classList.toggle("hidden", !p);
+  showAge(); $("#pModal").classList.remove("hidden"); f.name.focus();
+}
+function closeForm() { $("#pModal").classList.add("hidden"); }
+function showAge() { const a = ageOf($("#clPForm").birth.value); $("#pAge").textContent = a == null ? "" : `${a} god.`; }
+$("#clPForm").birth.oninput = showAge;
 $("#clNewP").onclick = () => openForm(null);
 $("#clEditP").onclick = () => (st.patient ? openForm(st.patient) : toast("Odaberite pacijenta"));
-$("#clPCancel").onclick = () => $("#clPForm").classList.add("hidden");
+$("#clPCancel").onclick = closeForm;
 $("#clPForm").onsubmit = async (e) => {
   e.preventDefault(); const f = e.target;
-  const body = { name: f.name.value.trim(), code: f.code.value.trim(), birth: f.birth.value, notes: f.notes.value };
+  const body = Object.fromEntries(P_FIELDS.map((k) => [k, f[k].value.trim()]));
+  body.ai_consent = f.ai_consent.checked;
   try {
     const p = f.dataset.id ? await api("PUT", "/api/patients/" + f.dataset.id, body) : await api("POST", "/api/patients", body);
-    f.classList.add("hidden");
+    closeForm();
     try { localStorage.setItem("ssb.patient", p.id); } catch (_) {}
     await loadPatients(p.id);
   } catch (er) { toast(er.message); }
 };
 $("#clPDel").onclick = async () => {
   const p = st.patient; if (!p) return;
-  if (!confirm(`Trajno obrisati pacijenta "${p.name}" sa svim sesijama i snimkama?`)) return;
-  try { await api("DELETE", "/api/patients/" + p.id); $("#clPForm").classList.add("hidden"); await loadPatients(""); } catch (er) { toast(er.message); }
+  if (!confirm(`Trajno obrisati pacijenta "${p.name}" sa svim sesijama, snimkama i AI mišljenjima?`)) return;
+  try { await api("DELETE", "/api/patients/" + p.id); closeForm(); await loadPatients(""); } catch (er) { toast(er.message); }
 };
+function renderSummary() {
+  const p = st.patient, box = $("#clPSummary");
+  if (!p) { box.innerHTML = ""; return; }
+  const age = ageOf(p.birth);
+  const bits = [age != null ? age + " god." : null, p.sex || null, p.diagnosis || null].filter(Boolean).map(esc).join(" · ");
+  box.innerHTML = (bits ? `<div>${bits}</div>` : "") + (p.complaint ? `<div class="clip" title="${esc(p.complaint)}">${esc(p.complaint)}</div>` : "") +
+    `<div>${p.ai_consent ? "✓ suglasnost za AI" : "✗ nema suglasnosti za AI"}</div>`;
+}
 
 async function loadPatientData() {
   const q = st.patient ? "?patient=" + encodeURIComponent(st.patient.id) : "";
@@ -77,7 +106,7 @@ async function loadPatientData() {
   ]);
   st.sessions = sessions; st.recs = recs;
   st.active = allActive.find((s) => !s.end) || null;
-  renderSession(); renderRecs();
+  renderSummary(); renderSession(); renderRecs();
 }
 
 // ============================================================ sessions
@@ -120,7 +149,7 @@ function renderRecs() {
   st.recs.forEach((r) => {
     const d = el("div", "cl-item row");
     const info = el("div", "grow click");
-    info.innerHTML = `<b>${esc(r.label || "Snimka")}</b><div class="small dim">${fmtTime(r.created)} · ${r.duration.toFixed(1)} s · ${r.source === "out" ? "obrađeno" : "suhi mikrofon"}</div>`;
+    info.innerHTML = `<b>${esc(r.task || r.label || "Snimka")}</b>${r.task && r.label ? ` <span class="dim">${esc(r.label)}</span>` : ""}<div class="small dim">${fmtTime(r.created)} · ${r.duration.toFixed(1)} s · ${r.source === "out" ? "obrađeno" : "suhi mikrofon"}</div>`;
     info.onclick = () => openAnalysis(r);
     const a = el("a", "btn", "⬇"); a.href = `/api/recordings/${r.id}/wav`; a.download = ""; a.title = "Preuzmi WAV";
     const del = el("button", null, "✕"); del.title = "Obriši";
@@ -290,7 +319,7 @@ $("#clRecBtn").onclick = async () => {
     if (st.recording) { const r = await api("POST", "/api/record/stop"); toast(`Spremljeno: ${r.duration.toFixed(1)} s`); }
     else {
       if (!st.patient && !confirm("Nije odabran pacijent — snimiti bez pacijenta?")) return;
-      await api("POST", "/api/record/start", { patient_id: st.patient?.id || null, source: $("#clRecSrc").value, label: $("#clRecLabel").value.trim() });
+      await api("POST", "/api/record/start", { patient_id: st.patient?.id || null, source: $("#clRecSrc").value, label: $("#clRecLabel").value.trim(), task: $("#clRecTask").value });
     }
   } catch (e) { toast(e.message); }
 };
@@ -303,10 +332,13 @@ function showRec(on, secs) {
 // ============================================================ analysis modal
 const an = { rec: null, buf: null, sel: [0, 0], report: null, src: null, ctx: null };
 async function openAnalysis(r) {
-  an.rec = r; an.report = null; an.buf = null;
+  an.rec = r; an.report = null; an.buf = null; an.ai = null;
   $("#anModal").classList.remove("hidden");
-  $("#anTitle").textContent = `Analiza glasa — ${st.patient ? st.patient.name + " — " : ""}${r.label || "snimka"} (${fmtTime(r.created)})`;
-  $("#anReport").value = "Učitavanje…"; $("#anTiles").innerHTML = "";
+  $("#anTitle").textContent = `Analiza glasa — ${st.patient ? st.patient.name + " — " : ""}${r.task || r.label || "snimka"} (${fmtTime(r.created)})`;
+  $("#anReport").value = "Učitavanje…"; $("#anTiles").innerHTML = ""; $("#anTiles2").innerHTML = "";
+  fillTasks($("#anTask"), r.task); $("#anNotes").value = r.notes || "";
+  $("#anAiOut").innerHTML = ""; $("#anAiPrompt").classList.add("hidden"); $("#anAiQ").value = "";
+  aiStatus(); loadAiHistory();
   try {
     an.ctx = an.ctx || new (window.AudioContext || window.webkitAudioContext)();
     const data = await (await fetch(`/api/recordings/${r.id}/wav`)).arrayBuffer();
@@ -317,7 +349,11 @@ async function openAnalysis(r) {
 }
 function closeAnalysis() { stopPlay(); $("#anModal").classList.add("hidden"); }
 $("#anClose").onclick = closeAnalysis;
-document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("#anModal").classList.contains("hidden")) closeAnalysis(); });
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return;
+  if (!$("#pModal").classList.contains("hidden")) closeForm();
+  else if (!$("#anModal").classList.contains("hidden")) closeAnalysis();
+});
 
 function channel() {
   // the louder channel (mono mic on a stereo interface)
@@ -371,6 +407,9 @@ async function runAnalysis() {
   } catch (e) { $("#anReport").value = "Greška: " + e.message; }
   drawSpec();
 }
+const saveRec = (patch) => api("PUT", "/api/recordings/" + an.rec.id, patch).then(() => Object.assign(an.rec, patch)).catch((e) => toast(e.message));
+$("#anTask").onchange = () => saveRec({ task: $("#anTask").value });
+$("#anNotes").onchange = () => saveRec({ notes: $("#anNotes").value });
 function tiles(r) {
   const f = (v, d) => (v == null ? "—" : v.toFixed(d));
   const T = [
@@ -381,6 +420,12 @@ function tiles(r) {
   ];
   $("#anTiles").innerHTML = T.map(([k, v, u, ok, n]) =>
     `<div class="tile ${ok == null ? "" : ok ? "ok" : "bad"}"><div class="dim small">${k}</div><div class="big mono">${v}<small> ${u}</small></div><div class="dim small">norma ${n}</div></div>`).join("");
+  const T2 = [
+    ["Najduža fonacija", r.max_voiced_s.toFixed(1), "s"], ["Raspon F0", f(r.f0_range_st, 1), "st"],
+    ["Prekidi zvučnosti", r.voice_breaks, `(${r.voice_break_degree.toFixed(0)} %)`], ["Pauze ≥ 250 ms", r.pauses, `(${r.pause_ratio.toFixed(0)} %)`],
+    ["Brzina govora", r.speech_rate.toFixed(2), "slog/s"], ["Brzina artikulacije", r.articulation_rate.toFixed(2), "slog/s"],
+  ];
+  $("#anTiles2").innerHTML = T2.map(([k, v, u]) => `<div class="tile"><div class="dim small">${k}</div><div class="mid mono">${v}<small> ${u}</small></div></div>`).join("");
 }
 // STFT sonagram of the selection, with the analysed F0 contour.
 function fft(re, im) {
@@ -436,9 +481,140 @@ $("#anCopy").onclick = () => { navigator.clipboard?.writeText($("#anReport").val
 $("#anSave").onclick = () => {
   const who = st.patient ? st.patient.name.replace(/\W+/g, "_") : "pacijent";
   const head = st.patient ? `Pacijent: ${st.patient.name}${st.patient.code ? " (" + st.patient.code + ")" : ""}\n` : "";
-  const txt = head + `Snimka: ${an.rec.label || an.rec.id} · ${fmtTime(an.rec.created)} · odabir ${$("#anSel").textContent}\n\n` + $("#anReport").value;
+  let txt = head + `Snimka: ${an.rec.task || an.rec.label || an.rec.id} · ${fmtTime(an.rec.created)} · odabir ${$("#anSel").textContent}\n` +
+    (an.rec.notes ? `Opažanja: ${an.rec.notes}\n` : "") + "\n" + $("#anReport").value;
+  if (an.ai) txt += `\n\n==== AI MIŠLJENJE (${an.ai.model}, ${fmtTime(an.ai.created)}) — pomoć rehabilitatoru, nije dijagnoza ====\n\n` + an.ai.text;
   const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([txt], { type: "text/plain;charset=utf-8" }));
   a.download = `${who}_nalaz_${new Date(an.rec.created).toISOString().slice(0, 10)}.txt`; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+};
+
+// ============================================================ AI opinion
+let AI = null;
+async function loadAiCfg() { try { AI = await api("GET", "/api/ai/config"); } catch (_) { AI = null; } return AI; }
+function aiReady() {
+  if (!AI) return "AI postavke nisu učitane.";
+  if (!AI.model) return "AI model nije postavljen — otvorite ⚙ AI postavke.";
+  if (AI.provider === "anthropic" && !AI.has_key) return "Nedostaje Anthropic API ključ — otvorite ⚙ AI postavke.";
+  return null;
+}
+async function aiStatus() {
+  await loadAiCfg();
+  const names = { anthropic: "Claude", openai: "OpenAI-kompatibilan", ollama: "Ollama (lokalno)" };
+  $("#anAiWho").textContent = AI ? `${names[AI.provider] || AI.provider} · ${AI.model || "—"}` : "";
+  $("#anAiImg").checked = !!AI?.send_image;
+  const warn = [];
+  const cfgErr = aiReady(); if (cfgErr) warn.push(cfgErr);
+  if (st.patient && !st.patient.ai_consent) warn.push("Pacijent nema zabilježenu suglasnost za AI analizu (Uredi pacijenta).");
+  if (AI && AI.provider !== "ollama" && !cfgErr) warn.push(`Pseudonimizirani podaci šalju se vanjskom servisu (${AI.effective_url}). Za potpuno lokalnu obradu odaberite Ollama.`);
+  const w = $("#anAiWarn"); w.innerHTML = warn.map(esc).join("<br>"); w.classList.toggle("hidden", !warn.length);
+  $("#anAiRun").disabled = !!cfgErr || (st.patient && !st.patient.ai_consent);
+}
+function aiBody() {
+  const b = { start: an.sel[0], end: an.sel[1], question: $("#anAiQ").value.trim() };
+  if ($("#anAiImg").checked) { try { b.image = $("#anSpec").toDataURL("image/jpeg", 0.85); } catch (_) {} }
+  return b;
+}
+async function ensureAnalysis() {
+  if (!an.report || Math.abs(an.report.offset - an.sel[0]) > 1e-6 || Math.abs(an.report.duration - (an.sel[1] - an.sel[0])) > 0.02) await runAnalysis();
+}
+$("#anAiPreview").onclick = async () => {
+  const pre = $("#anAiPrompt");
+  if (!pre.classList.contains("hidden")) { pre.classList.add("hidden"); return; }
+  try {
+    await ensureAnalysis();
+    const p = await api("POST", `/api/recordings/${an.rec.id}/ai/preview`, aiBody());
+    pre.textContent = `Servis: ${p.provider} (${p.url}) · model: ${p.model} · slika sonagrama: ${p.image ? "da" : "ne"}\n\n=== UPUTE MODELU ===\n${p.system}\n\n=== PODACI ===\n${p.user}`;
+    pre.classList.remove("hidden");
+  } catch (e) { toast(e.message); }
+};
+$("#anAiRun").onclick = async () => {
+  const btn = $("#anAiRun"); if (btn.disabled) return;
+  btn.disabled = true; const t0 = Date.now();
+  const tick = setInterval(() => (btn.textContent = `AI analizira… ${Math.round((Date.now() - t0) / 1000)} s`), 500);
+  $("#anAiOut").innerHTML = '<div class="dim">AI analizira snimku — temeljita analiza može potrajati i minutu-dvije…</div>';
+  try {
+    await ensureAnalysis();
+    showAi(await api("POST", `/api/recordings/${an.rec.id}/ai`, aiBody()));
+    loadAiHistory();
+  } catch (e) { $("#anAiOut").innerHTML = `<div class="err">${esc(e.message)}</div>`; }
+  finally { clearInterval(tick); btn.textContent = "Pokreni AI analizu"; btn.disabled = false; aiStatus(); }
+};
+function md(t) {
+  const inline = (x) => x.replace(/\*\*(.+?)\*\*/g, "<b>$1</b>").replace(/`([^`]+)`/g, "<code>$1</code>");
+  let html = "", list = null;
+  const close = () => { if (list) { html += `</${list}>`; list = null; } };
+  for (const l of esc(t).split("\n")) {
+    let m;
+    if ((m = l.match(/^\s*#{1,6}\s+(.*)/))) { close(); html += `<h4>${inline(m[1])}</h4>`; }
+    else if ((m = l.match(/^\s*[-*•]\s+(.*)/))) { if (list !== "ul") { close(); html += "<ul>"; list = "ul"; } html += `<li>${inline(m[1])}</li>`; }
+    else if ((m = l.match(/^\s*\d+[.)]\s+(.*)/))) { if (list !== "ol") { close(); html += "<ol>"; list = "ol"; } html += `<li>${inline(m[1])}</li>`; }
+    else if (!l.trim()) close();
+    else { close(); html += `<p>${inline(l)}</p>`; }
+  }
+  close(); return html;
+}
+function showAi(rep) {
+  an.ai = rep;
+  const head = `<div class="dim small">${esc(rep.model)} · ${fmtTime(rep.created)} · odsječak ${rep.start.toFixed(2)}–${rep.end.toFixed(2)} s${rep.question ? " · pitanje: " + esc(rep.question) : ""}</div>`;
+  $("#anAiOut").innerHTML = head + (rep.truncated ? '<div class="err small">Odgovor je skraćen (dosegnuto ograničenje duljine).</div>' : "") +
+    `<div class="md">${md(rep.text)}</div><div class="row"><button class="small" id="anAiCopy">Kopiraj AI mišljenje</button><button class="small danger" id="anAiDel">Obriši</button></div>`;
+  $("#anAiCopy").onclick = () => navigator.clipboard?.writeText(rep.text).then(() => toast("Kopirano"), () => toast("Kopiranje nije dopušteno"));
+  $("#anAiDel").onclick = async () => {
+    if (!confirm("Obrisati ovo AI mišljenje?")) return;
+    try { await api("DELETE", "/api/ai-reports/" + rep.id); an.ai = null; $("#anAiOut").innerHTML = ""; loadAiHistory(); } catch (e) { toast(e.message); }
+  };
+}
+async function loadAiHistory() {
+  const box = $("#anAiHist"); box.innerHTML = "";
+  if (!an.rec) return;
+  const list = await api("GET", `/api/recordings/${an.rec.id}/ai`).catch(() => []);
+  if (!list.length) return;
+  box.append(el("span", "dim", "Ranija AI mišljenja:"));
+  list.forEach((r) => { const b = el("button", "small", `${fmtTime(r.created)} · ${esc(r.model)}`); b.onclick = () => showAi(r); box.append(b); });
+}
+
+// ---- AI settings panel (header "AI" button)
+const AI_DEFAULT_MODEL = { anthropic: "claude-opus-5", openai: "", ollama: "llama3.2-vision" };
+const AI_URL_HINT = { anthropic: "https://api.anthropic.com", openai: "https://api.openai.com/v1", ollama: "http://localhost:11434/v1" };
+async function openAiPanel() {
+  $("#aiPanel").classList.remove("hidden");
+  await loadAiCfg(); if (!AI) return;
+  $("#aiProvider").value = AI.provider; $("#aiModel").value = AI.model; $("#aiUrl").value = AI.base_url;
+  $("#aiImage").checked = AI.send_image; aiPanelHints();
+}
+function aiPanelHints() {
+  const pr = $("#aiProvider").value, same = AI && pr === AI.provider;
+  $("#aiUrl").placeholder = AI_URL_HINT[pr];
+  $("#aiKey").value = "";
+  $("#aiKey").placeholder = pr === "ollama" ? "(nije potreban)" : same && AI.has_key ? "•••• spremljen (upišite za promjenu)" : pr === "openai" ? "sk-… (prazno za lokalne servere)" : "sk-ant-…";
+  $("#aiInfo").innerHTML = pr === "anthropic"
+    ? 'Zadani model: <b>claude-opus-5</b>. Ključ: console.anthropic.com → API Keys. Ključ se sprema samo na ovom računalu (ai.json) i nikad se ne prikazuje u pregledniku.'
+    : pr === "ollama" ? 'Ollama radi lokalno (ollama.com). Za sliku sonagrama treba model s vidom, npr. <b>llama3.2-vision</b> ili <b>qwen2.5vl</b>; inače isključite sliku.'
+    : "Bilo koji servis s OpenAI /chat/completions sučeljem (OpenAI, Azure proxy, LM Studio, vLLM, OpenRouter…). Upišite model i adresu.";
+}
+$("#btnAi").onclick = () => ($("#aiPanel").classList.contains("hidden") ? openAiPanel() : $("#aiPanel").classList.add("hidden"));
+$("#anAiCfg").onclick = () => { closeAnalysis(); openAiPanel(); window.scrollTo(0, 0); };
+$("#aiProvider").onchange = () => {
+  const pr = $("#aiProvider").value;
+  if (!AI || pr !== AI.provider) { $("#aiModel").value = AI_DEFAULT_MODEL[pr]; $("#aiUrl").value = ""; }
+  else { $("#aiModel").value = AI.model; $("#aiUrl").value = AI.base_url; }
+  aiPanelHints();
+};
+async function saveAi(extra = {}) {
+  const pr = $("#aiProvider").value;
+  if (AI && pr !== AI.provider && AI.has_key && !$("#aiKey").value && pr !== "ollama" &&
+      !confirm("Promjena servisa briše spremljeni API ključ prethodnog servisa. Nastaviti?")) return false;
+  AI = await api("PUT", "/api/ai/config", { provider: pr, model: $("#aiModel").value, base_url: $("#aiUrl").value,
+    api_key: $("#aiKey").value || null, send_image: $("#aiImage").checked, ...extra });
+  aiPanelHints(); return true;
+}
+$("#aiSave").onclick = async () => { try { if (await saveAi()) toast("AI postavke spremljene"); } catch (e) { toast(e.message); } };
+$("#aiClearKey").onclick = async () => { if (!confirm("Obrisati spremljeni API ključ?")) return; try { await saveAi({ clear_key: true, api_key: null }); toast("Ključ obrisan"); } catch (e) { toast(e.message); } };
+$("#aiTest").onclick = async () => {
+  const b = $("#aiTest"); b.disabled = true; b.textContent = "Testiram…";
+  try { if (!(await saveAi())) return; const r = await api("POST", "/api/ai/test"); $("#aiInfo").innerHTML = `✓ Veza radi — model <b>${esc(r.model)}</b> je odgovorio: „${esc(r.text)}“`; }
+  catch (e) { $("#aiInfo").innerHTML = `<span class="err">✗ ${esc(e.message)}</span>`; }
+  finally { b.disabled = false; b.textContent = "Test veze"; }
 };
 
 // ============================================================ wiring to the shared core

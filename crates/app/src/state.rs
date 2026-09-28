@@ -1,4 +1,5 @@
-use crate::clinic::{self, Clinic, Recording, Session};
+use crate::ai::{self, AiConfig};
+use crate::clinic::{self, AiReport, Clinic, Recording, Session};
 use anyhow::{anyhow, Result};
 use steroid_engine::fft::Spectrum;
 use steroid_engine::record::Recorder;
@@ -17,6 +18,7 @@ pub struct Paths {
     pub presets: PathBuf,
     pub recordings: PathBuf,
     pub clinic: PathBuf,
+    pub ai: PathBuf,
 }
 
 impl Paths {
@@ -31,6 +33,7 @@ impl Paths {
             presets: data.join("presets"),
             recordings: data.join("recordings"),
             clinic: data.join("clinic.json"),
+            ai: data.join("ai.json"),
             data,
         }
     }
@@ -63,6 +66,18 @@ pub struct App {
     pub dirty: AtomicBool,
     /// Lock order: `inner` before `clinic`, never the reverse.
     pub clinic: Mutex<Clinic>,
+    pub ai: Mutex<AiConfig>,
+}
+
+/// Everything an AI request needs, gathered without holding locks during the call.
+pub struct AiJob {
+    pub cfg: AiConfig,
+    pub rec: Recording,
+    pub start: f32,
+    pub end: f32,
+    pub system: String,
+    pub user: String,
+    pub image: Option<(String, String)>,
 }
 
 fn load_json<T: serde::de::DeserializeOwned + Default>(p: &PathBuf) -> T {
@@ -77,6 +92,7 @@ impl App {
         let live = board.nodes.iter().map(|n| (n.id.clone(), LiveNode::from_desc(n))).collect();
         let (events, _) = broadcast::channel(256);
         let clinic = Clinic::load(&paths.clinic);
+        let ai = AiConfig::load(&paths.ai);
         Arc::new(App {
             inner: Mutex::new(Inner {
                 board,
@@ -92,6 +108,7 @@ impl App {
             paths,
             dirty: AtomicBool::new(false),
             clinic: Mutex::new(clinic),
+            ai: Mutex::new(ai),
         })
     }
 
@@ -323,7 +340,7 @@ impl App {
         Ok(s)
     }
 
-    pub fn start_recording(&self, patient_id: Option<String>, source: &str, label: String) -> Result<()> {
+    pub fn start_recording(&self, patient_id: Option<String>, source: &str, label: String, task: String) -> Result<()> {
         let mut inner = self.inner.lock().unwrap();
         if inner.recording.is_some() {
             return Err(anyhow!("already recording"));
@@ -349,6 +366,8 @@ impl App {
             duration: 0.0,
             sample_rate: engine.info.sample_rate,
             source: if src == 1 { "out" } else { "in" }.into(),
+            task,
+            notes: String::new(),
         };
         let path = clinic::wav_path(&self.paths.recordings, &meta.id);
         match Recorder::start(cons, &path, meta.sample_rate, src, self.stats.clone()) {
@@ -388,6 +407,7 @@ impl App {
         if c.recordings.len() == before {
             return Err(anyhow!("no such recording"));
         }
+        c.ai_reports.retain(|a| a.recording_id != id);
         let _ = std::fs::remove_file(clinic::wav_path(&self.paths.recordings, id));
         self.save_clinic(&c)
     }
@@ -414,6 +434,68 @@ impl App {
         let b = ((end.unwrap_or(len).clamp(0.0, len)) * sr as f32) as usize;
         let (a, b) = (a.min(b), a.max(b));
         Ok(analysis::analyze(&x[a..b], sr as f32))
+    }
+
+    // ------------------------------------------------------------ AI opinion
+
+    /// Build the full AI request for a recording range. `image` is a data URL.
+    pub fn ai_job(&self, id: &str, start: Option<f32>, end: Option<f32>, question: &str, image: Option<&str>) -> Result<AiJob> {
+        let cfg = self.ai.lock().unwrap().clone();
+        let (rec, patient, earlier) = {
+            let c = self.clinic.lock().unwrap();
+            let rec = c.recordings.iter().find(|r| r.id == id).cloned().ok_or_else(|| anyhow!("no such recording"))?;
+            let patient = rec.patient_id.as_ref().and_then(|p| c.patients.iter().find(|x| &x.id == p)).map(|p| p.data.clone());
+            let mut earlier: Vec<Recording> = c
+                .recordings
+                .iter()
+                .filter(|r| r.patient_id.is_some() && r.patient_id == rec.patient_id && r.created < rec.created)
+                .cloned()
+                .collect();
+            earlier.sort_by_key(|r| r.created);
+            let skip = earlier.len().saturating_sub(6);
+            (rec, patient, earlier.split_off(skip))
+        };
+        if let Some(p) = &patient {
+            if !p.ai_consent {
+                return Err(anyhow!("pacijent nema zabilježenu suglasnost za AI analizu (Uredi pacijenta)"));
+            }
+        }
+        let report = self.analyze(id, start, end)?;
+        let (a, b) = (start.unwrap_or(0.0).max(0.0), end.unwrap_or(rec.duration).min(rec.duration));
+        let history: Vec<(String, String, analysis::VoiceReport)> = earlier
+            .iter()
+            .filter_map(|r| self.analyze(&r.id, None, None).ok().map(|rep| (clinic::date_str(r.created), r.task.clone(), rep)))
+            .collect();
+        let image = match image {
+            Some(img) if cfg.send_image && !img.is_empty() => Some(ai::parse_image(img)?),
+            _ => None,
+        };
+        let age = patient.as_ref().and_then(|p| clinic::age_at(&p.birth, rec.created));
+        let (system, user) = ai::build_prompt(&ai::Context {
+            patient: patient.as_ref(),
+            age,
+            rec: &rec,
+            start: a.min(b),
+            end: a.max(b),
+            report: &report,
+            history: &history,
+            question,
+            has_image: image.is_some(),
+        });
+        Ok(AiJob { cfg, rec, start: a.min(b), end: a.max(b), system, user, image })
+    }
+
+    /// Run the job against the configured provider and store the opinion.
+    pub fn ai_run(&self, job: AiJob, question: &str) -> Result<AiReport> {
+        let ans = ai::ask_report(&job.cfg, &job.system, &job.user, job.image.as_ref())?;
+        let rep = ai::new_report(&job.rec, &job.cfg, job.start, job.end, question, ans);
+        let mut c = self.clinic.lock().unwrap();
+        if !c.recordings.iter().any(|r| r.id == job.rec.id) {
+            return Err(anyhow!("snimka je u međuvremenu obrisana"));
+        }
+        c.ai_reports.push(rep.clone());
+        self.save_clinic(&c)?;
+        Ok(rep)
     }
 
     pub fn meters_json(&self) -> String {

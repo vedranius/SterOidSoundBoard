@@ -20,6 +20,7 @@
   </div>
   <button id="btnMute" title="Silence the output (meters and recording keep working)">Mute</button>
   <button id="btnPresets">Presets</button>
+  <button id="btnAi" title="AI provider settings">AI</button>
   <button id="btnAudio">Audio</button>
 </header>
 
@@ -41,6 +42,19 @@
   <span class="dim">Templates:</span><span id="tplList" class="row"></span>
 </section>
 
+<section id="aiPanel" class="panel hidden" lang="hr">
+  <label>AI servis <select id="aiProvider">
+    <option value="anthropic">Anthropic Claude</option>
+    <option value="openai">OpenAI-kompatibilan (OpenAI, LM Studio, vLLM…)</option>
+    <option value="ollama">Ollama (lokalno, podaci ne napuštaju računalo)</option></select></label>
+  <label>Model <input id="aiModel" size="22"></label>
+  <label>Adresa <input id="aiUrl" size="30"></label>
+  <label>API ključ <input id="aiKey" type="password" size="24" autocomplete="off"></label>
+  <label class="chk"><input type="checkbox" id="aiImage"> šalji sliku sonagrama</label>
+  <button id="aiSave" class="pri">Spremi</button><button id="aiTest">Test veze</button><button id="aiClearKey">Obriši ključ</button>
+  <div id="aiInfo" class="dim small" style="flex-basis:100%"></div>
+</section>
+
 <main id="music">
   <aside id="palette"><div class="dim small">Tap to add</div></aside>
   <div id="board">
@@ -54,13 +68,7 @@
   <aside class="cl-side">
     <h3>Pacijent</h3>
     <div class="row"><select id="clPatient"></select><button id="clNewP" title="Novi pacijent">+</button><button id="clEditP">Uredi</button></div>
-    <form id="clPForm" class="cl-form hidden">
-      <label>Ime i prezime<input name="name" required maxlength="200"></label>
-      <label>Šifra / MBO<input name="code" maxlength="100"></label>
-      <label>Datum rođenja<input name="birth" type="date"></label>
-      <label>Bilješke<textarea name="notes" rows="3" maxlength="20000"></textarea></label>
-      <div class="row"><button type="submit" class="pri">Spremi</button><button type="button" id="clPCancel">Odustani</button><button type="button" id="clPDel" class="danger">Obriši</button></div>
-    </form>
+    <div id="clPSummary" class="cl-psum dim small"></div>
 
     <h3>Sesija</h3>
     <div class="row"><span id="clSessState" class="dim">Nema aktivne sesije</span><span id="clTimer" class="mono"></span></div>
@@ -105,8 +113,9 @@
       <div class="card2 cl-recbox">
         <label class="chk"><input type="checkbox" id="clAutoMute" checked> Utišaj izlaz na ovom tabu (nema jeke)</label>
         <div class="row">
+          <label>Zadatak <select id="clRecTask"></select></label>
           <label>Izvor <select id="clRecSrc"><option value="in">suhi mikrofon</option><option value="out">obrađeni izlaz</option></select></label>
-          <label class="grow">Oznaka <input id="clRecLabel" placeholder="npr. vokal /a/, čitanje teksta"></label>
+          <label class="grow">Oznaka <input id="clRecLabel" placeholder="npr. nakon 4. terapije"></label>
         </div>
         <button id="clRecBtn" class="rec">ZAPOČNI SNIMANJE</button>
         <div id="clRecInfo" class="dim small">Za analizu glasa: produženi vokal /a/ 3–5 s, stalna udaljenost od mikrofona, tiha prostorija.</div>
@@ -126,9 +135,54 @@
       <canvas id="anSpec" width="1200" height="256" class="spec"></canvas>
     </div>
     <div id="anTiles" class="tiles"></div>
-    <div class="card2"><div class="h row"><span>Klinički nalaz</span><span class="grow"></span><button id="anCopy">Kopiraj</button><button id="anSave">Spremi .txt</button></div>
+    <div id="anTiles2" class="tiles small-tiles"></div>
+    <div class="card2 an-meta">
+      <label>Zadatak <select id="anTask"></select></label>
+      <label class="grow">Opažanja rehabilitatora za ovu snimku <textarea id="anNotes" rows="2" placeholder="npr. tvrdi počeci, blokovi na p/t/k, šumni glas nakon 30 s (bez imena i osobnih podataka)"></textarea></label>
+    </div>
+    <div class="card2"><div class="h row"><span>Klinički nalaz (akustička analiza)</span><span class="grow"></span><button id="anCopy">Kopiraj</button><button id="anSave">Spremi .txt</button></div>
       <textarea id="anReport" readonly rows="16" class="mono"></textarea></div>
+    <div class="card2" id="anAi">
+      <div class="h row"><span>AI mišljenje</span><span id="anAiWho" class="dim"></span><span class="grow"></span><button id="anAiCfg" class="small">⚙ AI postavke</button></div>
+      <div id="anAiWarn" class="banner hidden"></div>
+      <textarea id="anAiQ" rows="2" placeholder="Dodatno pitanje ili fokus (neobavezno), npr. „Usporedi s prethodnom snimkom“ ili „Je li DAF prikladan?“" maxlength="4000"></textarea>
+      <div class="row" style="margin-top:8px">
+        <label class="chk small"><input type="checkbox" id="anAiImg" checked> priloži sonagram</label>
+        <span class="grow"></span>
+        <button id="anAiPreview">Pregled podataka za AI</button>
+        <button id="anAiRun" class="pri">Pokreni AI analizu</button>
+      </div>
+      <div class="dim small" style="margin-top:6px">AI ne čuje snimku: dobiva izmjerene parametre, profil pacijenta bez imena, šifre i datuma rođenja, vaša opažanja i (po izboru) sliku sonagrama. Mišljenje je pomoć rehabilitatoru, ne dijagnoza.</div>
+      <pre id="anAiPrompt" class="prompt hidden"></pre>
+      <div id="anAiOut" class="ai-out"></div>
+      <div id="anAiHist" class="row small"></div>
+    </div>
   </div>
+</div>
+
+<div id="pModal" class="modal hidden" lang="hr">
+  <form id="clPForm" class="modal-in pform card2">
+    <div class="row"><h2 class="grow" id="pTitle">Pacijent</h2><button type="button" id="clPCancel">✕</button></div>
+    <div class="pgrid">
+      <label>Ime i prezime *<input name="name" required maxlength="200"></label>
+      <label>Šifra / MBO<input name="code" maxlength="100"></label>
+      <label>Datum rođenja<input name="birth" type="date"><span id="pAge" class="dim small"></span></label>
+      <label>Spol<select name="sex"><option value="">—</option><option>Ž</option><option>M</option><option>drugo</option></select></label>
+      <label>Materinski jezik<input name="language" maxlength="100" placeholder="npr. hrvatski"></label>
+      <label>Pušenje<select name="smoking"><option value="">—</option><option>nepušač</option><option>bivši pušač</option><option>pušač</option></select></label>
+      <label class="wide">Dijagnoza / MKB-10<input name="diagnosis" maxlength="2000" placeholder="npr. R49.0 disfonija; F98.5 mucanje"></label>
+      <label class="wide">Trenutni problem / razlog dolaska<textarea name="complaint" rows="2" maxlength="5000"></textarea></label>
+      <label class="wide">Anamneza problema (početak, trajanje, tijek, dosadašnja terapija)<textarea name="history" rows="3" maxlength="20000"></textarea></label>
+      <label>Medicinska povijest (operacije, neurološko, refluks, hormonalno…)<textarea name="medical" rows="3" maxlength="20000"></textarea></label>
+      <label>Lijekovi<textarea name="medications" rows="3" maxlength="5000"></textarea></label>
+      <label>Zanimanje i vokalno opterećenje<textarea name="voice_use" rows="2" maxlength="5000"></textarea></label>
+      <label>Sluh / slušni status<textarea name="hearing" rows="2" maxlength="2000"></textarea></label>
+      <label class="wide">Ciljevi terapije<textarea name="goals" rows="2" maxlength="5000"></textarea></label>
+      <label class="wide">Bilješke<textarea name="notes" rows="3" maxlength="20000"></textarea></label>
+      <label class="chk wide"><input type="checkbox" name="ai_consent"> Pacijent je dao suglasnost za obradu pseudonimiziranih podataka putem AI servisa</label>
+    </div>
+    <div class="row"><button type="submit" class="pri">Spremi</button><span class="grow"></span><button type="button" id="clPDel" class="danger">Obriši pacijenta</button></div>
+  </form>
 </div>
 
 <div id="toast"></div>

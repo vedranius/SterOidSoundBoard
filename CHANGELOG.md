@@ -2,6 +2,39 @@
 
 All notable changes are documented here. Versioning: [SemVer](https://semver.org).
 
+## [0.3.0] - 2026-09-28
+
+DigiLingua: full patient profile and an **AI opinion** on voice recordings for the rehabilitator.
+
+### Added
+- **Patient profile**: sex, age (from birth date), diagnosis / ICD-10, current problem, history,
+  medical history, medications, occupation and vocal load, smoking, hearing, native language,
+  therapy goals, notes and **consent for AI processing**. Edited in a dialog; summary in the sidebar.
+  Older `clinic.json` files load unchanged.
+- **Recording task** (sustained /a/ /i/ /u/, reading, spontaneous speech, counting, …) chosen when
+  recording and editable later, plus the clinician's observations per recording.
+- **New acoustic measures** (also in the clinical report): F0 range in semitones, longest continuous
+  phonation, voice breaks and their degree, silent pauses ≥ 250 ms (count, mean, share), syllable
+  nuclei, speech rate and articulation rate (de Jong & Wempe) — useful for fluency/stuttering.
+- **AI opinion** in the analysis window: the AI receives the acoustic measures, F0 contour summary,
+  pseudonymised patient profile (**never name, code or birth date** — age only), recording task,
+  clinician's notes, earlier recordings of the patient for comparison, an optional question and,
+  optionally, the sonagram image. It returns a structured Croatian opinion (summary, interpretation,
+  link to the problem, hypotheses to check, rehabilitation suggestions incl. DAF/FAF/noise settings,
+  referral red flags, limitations). Opinions are stored per recording, can be reopened, copied,
+  deleted and are included in the saved `.txt` report. "Pregled podataka za AI" shows exactly what is sent.
+- **AI settings** (header "AI"): Anthropic Claude (default `claude-opus-5`, server-side refusal
+  fallback), any OpenAI-compatible API (OpenAI, LM Studio, vLLM, OpenRouter…) or local **Ollama**
+  (nothing leaves the machine). The API key stays in `ai.json` (owner-only permissions) and is never
+  sent to browsers; "Test veze" checks provider, model and key.
+- AI requests require the patient's recorded consent; retries on overload/rate limits; local and
+  LAN AI servers bypass HTTP proxies from the environment.
+
+### Notes
+- The AI does not hear the audio (the Claude API has no audio input); it interprets measurements
+  and the sonagram image. The opinion supports the rehabilitator and is not a diagnosis.
+- Still no login: anyone on the network can use the configured AI key — use `--local` in clinics.
+
 ## [0.2.0] - 2026-09-28
 
 SterOidSoundBoard now has two modes on **one engine**: **Music** (the pedalboard) and

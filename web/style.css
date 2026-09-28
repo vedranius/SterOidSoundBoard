@@ -134,3 +134,29 @@ button.rec.live{background:var(--bad);color:#fff;animation:pulse 1.2s infinite}
   .eq-labels{font-size:7px}
   .ctl{grid-template-columns:90px 1fr 60px 20px}
 }
+/* ---- v0.3: patient dialog, AI */
+.pform{max-width:900px}
+.pgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.pgrid label{display:flex;flex-direction:column;gap:3px;font-size:12px;color:var(--dim)}
+.pgrid label.wide{grid-column:1/-1}
+.pgrid label.chk{flex-direction:row;color:var(--fg);font-size:13px}
+.pgrid textarea,.pgrid input,.pgrid select{color:var(--fg);max-width:none}
+.cl-psum{display:flex;flex-direction:column;gap:2px;padding:0 2px}
+.small-tiles{grid-template-columns:repeat(6,1fr)}
+.small-tiles .tile{padding:8px}
+.tile .mid{font-size:18px;font-weight:700;margin-top:2px}
+.an-meta{display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap}
+.an-meta label{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--dim)}
+#anAiQ{margin-top:4px}
+#anAiWarn{margin-bottom:8px;font-size:13px}
+.prompt{white-space:pre-wrap;background:#07090c;border:1px solid var(--line);border-radius:8px;padding:10px;font-size:12px;max-height:340px;overflow:auto;margin-top:8px}
+.ai-out{margin-top:10px}
+.ai-out .md{background:#0b0e12;border:1px solid var(--line);border-radius:8px;padding:6px 16px;margin:8px 0;line-height:1.55}
+.ai-out h4{margin:14px 0 4px;color:var(--acc);font-size:15px}
+.ai-out ul,.ai-out ol{margin:4px 0;padding-left:22px}
+.ai-out p{margin:6px 0}
+.ai-out code{background:#1a1f26;padding:0 4px;border-radius:4px}
+#anAiHist{margin-top:8px}
+#aiPanel input{min-width:0}
+button:disabled{opacity:.5;cursor:default}
+@media (max-width:900px){.pgrid{grid-template-columns:1fr}.small-tiles{grid-template-columns:repeat(2,1fr)}}

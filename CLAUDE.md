@@ -28,8 +28,10 @@ DigiLingua UI text is Croatian; Music UI is English.
   `analysis.rs` voice analysis (F0/jitter/shimmer/HNR + Croatian report), `record.rs` WAV writer
   thread + loader, `templates.rs` built-in boards (DigiLingua chain).
 - `crates/app` (steroidsoundboard): `main.rs` args/startup, `state.rs` App state (presets, recording,
-  clinic ops; lock order `inner` → `clinic`), `clinic.rs` patients/sessions/recordings store,
-  `server.rs` axum REST + WS.
+  clinic ops, AI jobs; lock order `inner` → `clinic`), `clinic.rs` patients/sessions/recordings/
+  AI-report store, `ai.rs` AI providers (Anthropic Messages API raw HTTP via ureq+rustls/ring,
+  default `claude-opus-5` + `fallbacks: "default"`; OpenAI-compatible; Ollama) and the Croatian
+  clinical prompt (pseudonymised: never name/code/birth date), `server.rs` axum REST + WS.
 - `web/` vanilla JS UI, embedded with rust-embed: `app.js` core + pedalboard (HOOKS, setParam,
   setBypass shared by views), `clinic.js` DigiLingua view.
 - `packaging/linux/` systemd unit + RPi install script. `.github/workflows/build.yml` CI + releases on `v*` tags.
@@ -44,9 +46,12 @@ DigiLingua UI text is Croatian; Music UI is English.
 ## Status
 v0.1.0 engine foundation, pedalboard, CI.
 v0.2.0 DigiLingua mode + 6 new nodes, recording, voice analysis, presets/templates, mute, live spectrum.
-Windows/arm64 CI not yet verified. No auth yet (patient data!) — PIN/login is top priority in 0.3.
+v0.3.0 full patient profile + AI consent, recording task/notes, fluency measures, AI opinion
+(Claude / OpenAI-compatible / Ollama). CI green on all 3 targets since 0.2.0.
+No auth yet (patient data + AI key on LAN!) — PIN/login is top priority in 0.4.
+Tags can't be pushed from Claude's cloud sessions (git proxy): Vedran pushes `vX.Y.Z` himself.
 
-## Next: v0.3.0
+## Next: v0.4.0
 0. PIN/login (patient data on LAN), optional per-clinic data dir.
 1. Verify CI green on all 3 targets; fix whatever breaks (Windows first).
 2. Windows ASIO (cpal `asio` feature; ASIO SDK in CI, check its license) + WASAPI exclusive option.
@@ -54,6 +59,6 @@ Windows/arm64 CI not yet verified. No auth yet (patient data!) — PIN/login is 
 4. Pisound support on RPi (button + MIDI), RT tuning check.
 5. State-preserving graph edits (reuse processors across Schedule rebuilds so delay tails don't reset).
 6. Multi-channel routing (beyond first 2 channels).
-Roadmap after: 0.4 LV2 hosting + plugin manager, 0.5 control-surface designer + MIDI learn/OSC,
-0.6 AI Lab (Faust), 0.7 RPi image, snapshots, DigiLingua exercise protocols + progress charts
+Roadmap after: 0.5 LV2 hosting + plugin manager, 0.6 control-surface designer + MIDI learn/OSC,
+0.7 AI Lab (Faust), 0.8 RPi image, snapshots, DigiLingua exercise protocols + progress charts
 (analysis history per patient), PDF report export.
