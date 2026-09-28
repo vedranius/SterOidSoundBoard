@@ -52,6 +52,17 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/recordings/{id}", put(update_recording).delete(delete_recording))
         .route("/api/recordings/{id}/wav", get(recording_wav))
         .route("/api/recordings/{id}/analyze", post(analyze))
+        .route("/api/recordings/{id}/tracks", post(tracks))
+        .route("/api/recordings/{id}/textgrid", get(textgrid))
+        .route("/api/recordings/{id}/summary", get(annotation_summary))
+        .route("/api/patients/{id}/progress", get(progress))
+        .route("/api/sessions/{id}/detail", get(session_detail))
+        .route("/api/sessions/{id}/apply", post(session_apply))
+        .route("/api/clinic/settings", get(get_clinic_settings).put(put_clinic_settings))
+        .route("/api/clinic/annotation-kinds", get(annotation_kinds))
+        .route("/api/clinic/presets", get(list_clinical_presets).post(save_clinical_preset))
+        .route("/api/clinic/presets/{id}", delete(delete_clinical_preset))
+        .route("/api/clinic/presets/{id}/load", post(load_clinical_preset))
         .route("/api/ai/config", get(ai_config).put(set_ai_config))
         .route("/api/ai/test", post(ai_test))
         .route("/api/recordings/{id}/ai/preview", post(ai_preview).layer(DefaultBodyLimit::max(12 << 20)))
@@ -70,6 +81,7 @@ async fn status(State(app): S) -> Json<Value> {
         "config": i.audio_cfg,
         "error": i.last_error,
         "mute": app.stats.mute.load(Ordering::Relaxed),
+        "preset": *app.current_preset.lock().unwrap(),
         "recording": i.recording.is_some(),
     }))
 }
@@ -241,10 +253,43 @@ async fn list_sessions(State(app): S, Query(q): Query<ByPatient>) -> Json<Value>
         .sessions
         .iter()
         .filter(|s| q.patient.is_none() || q.patient.as_ref() == Some(&s.patient_id))
-        .map(|s| json!({"id": s.id, "patient_id": s.patient_id, "start": s.start, "end": s.end, "notes": s.notes}))
+        .map(|s| {
+            let recs = c.recordings.iter().filter(|r| r.session_id.as_deref() == Some(&s.id)).count();
+            json!({"id": s.id, "patient_id": s.patient_id, "start": s.start, "end": s.end, "notes": s.notes, "preset": s.preset, "recordings": recs})
+        })
         .collect();
     v.reverse();
     Json(json!(v))
+}
+
+async fn session_detail(State(app): S, Path(id): Path<String>) -> Response {
+    let c = app.clinic.lock().unwrap();
+    let Some(s) = c.sessions.iter().find(|s| s.id == id) else { return err("no such session") };
+    let nodes: Vec<Value> = s
+        .board
+        .as_ref()
+        .map(|b| {
+            b.nodes
+                .iter()
+                .filter(|n| n.role.is_some())
+                .map(|n| json!({"role": n.role, "kind": n.kind, "bypass": n.bypass, "params": n.params}))
+                .collect()
+        })
+        .unwrap_or_default();
+    let recs: Vec<&clinic::Recording> = c.recordings.iter().filter(|r| r.session_id.as_deref() == Some(&s.id)).collect();
+    Json(json!({"id": s.id, "patient_id": s.patient_id, "start": s.start, "end": s.end, "notes": s.notes,
+                "preset": s.preset, "has_board": s.board.is_some(), "nodes": nodes, "recordings": recs}))
+    .into_response()
+}
+
+async fn session_apply(State(app): S, Path(id): Path<String>) -> Response {
+    let (board, preset) = {
+        let c = app.clinic.lock().unwrap();
+        let Some(s) = c.sessions.iter().find(|s| s.id == id) else { return err("no such session") };
+        let Some(b) = s.board.clone() else { return err("sesija nema spremljene postavke") };
+        (b, s.preset.clone())
+    };
+    done(app.set_board_named(board, preset))
 }
 
 #[derive(Deserialize)]
@@ -329,6 +374,27 @@ struct RecordingEdit {
     label: Option<String>,
     task: Option<String>,
     notes: Option<String>,
+    annotations: Option<Vec<clinic::Annotation>>,
+    /// Manual syllable count; 0 clears it.
+    syllables: Option<u32>,
+}
+
+fn check_annotations(a: &[clinic::Annotation], duration: f32) -> Result<(), String> {
+    if a.len() > 5000 {
+        return Err("previše oznaka".into());
+    }
+    for x in a {
+        if !(x.start.is_finite() && x.end.is_finite() && x.start >= 0.0 && x.end > x.start && x.end <= duration + 0.5) {
+            return Err(format!("neispravno vrijeme oznake {:.2}–{:.2} s", x.start, x.end));
+        }
+        if !clinic::ANNOTATION_KINDS.iter().any(|k| k.0 == x.kind) {
+            return Err(format!("nepoznata vrsta oznake: {}", x.kind));
+        }
+        if x.text.len() > 500 || x.id.is_empty() || x.id.len() > 40 || !x.id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+            return Err("neispravna oznaka".into());
+        }
+    }
+    Ok(())
 }
 
 async fn update_recording(State(app): S, Path(id): Path<String>, Json(e): Json<RecordingEdit>) -> Response {
@@ -343,7 +409,101 @@ async fn update_recording(State(app): S, Path(id): Path<String>, Json(e): Json<R
     if let Some(v) = e.notes {
         r.notes = v.chars().take(20_000).collect();
     }
+    if let Some(a) = e.annotations {
+        if let Err(m) = check_annotations(&a, r.duration) {
+            return err(m);
+        }
+        r.annotations = a;
+    }
+    if let Some(n) = e.syllables {
+        r.syllables = (n > 0).then_some(n.min(1_000_000));
+    }
     done(app.save_clinic(&c))
+}
+
+async fn textgrid(State(app): S, Path(id): Path<String>) -> Response {
+    let c = app.clinic.lock().unwrap();
+    let Some(r) = c.recordings.iter().find(|r| r.id == id) else { return StatusCode::NOT_FOUND.into_response() };
+    (
+        [
+            (header::CONTENT_TYPE, "text/plain; charset=utf-8".to_string()),
+            (header::CONTENT_DISPOSITION, format!("attachment; filename=\"{}.TextGrid\"", r.id)),
+        ],
+        clinic::textgrid(r),
+    )
+        .into_response()
+}
+
+async fn annotation_summary(State(app): S, Path(id): Path<String>) -> Response {
+    let r = tokio::task::spawn_blocking(move || -> anyhow::Result<Value> {
+        let rec = app.clinic.lock().unwrap().recordings.iter().find(|r| r.id == id).cloned().ok_or_else(|| anyhow::anyhow!("no such recording"))?;
+        let st = app.clinic_settings().analysis;
+        let nuclei = app.whole_report(&id, &st.sanitized()).ok().map(|w| w.syllable_nuclei);
+        Ok(json!(clinic::summarize(&rec, nuclei)))
+    })
+    .await;
+    match r {
+        Ok(Ok(v)) => Json(v).into_response(),
+        Ok(Err(e)) => err(e),
+        Err(e) => err(e),
+    }
+}
+
+async fn annotation_kinds() -> Json<Value> {
+    Json(json!(clinic::ANNOTATION_KINDS.iter().map(|(id, label, sld)| json!({"id": id, "label": label, "sld": sld})).collect::<Vec<_>>()))
+}
+
+async fn progress(State(app): S, Path(id): Path<String>) -> Response {
+    match tokio::task::spawn_blocking(move || app.progress(&id)).await {
+        Ok(Ok(v)) => Json(v).into_response(),
+        Ok(Err(e)) => err(e),
+        Err(e) => err(e),
+    }
+}
+
+async fn get_clinic_settings(State(app): S) -> Json<clinic::ClinicSettings> {
+    Json(app.clinic_settings())
+}
+
+async fn put_clinic_settings(State(app): S, Json(mut b): Json<clinic::ClinicSettings>) -> Response {
+    b.clinic_name = b.clinic_name.chars().take(200).collect();
+    b.clinician = b.clinician.chars().take(200).collect();
+    b.analysis = b.analysis.sanitized();
+    b.calibration_db = b.calibration_db.filter(|v| v.is_finite() && v.abs() < 200.0);
+    let mut c = app.clinic.lock().unwrap();
+    c.settings = b;
+    match app.save_clinic(&c) {
+        Ok(()) => Json(c.settings.clone()).into_response(),
+        Err(e) => err(e),
+    }
+}
+
+async fn list_clinical_presets(State(app): S) -> Json<Vec<Value>> {
+    Json(app.clinical_presets())
+}
+
+#[derive(Deserialize)]
+struct PresetIn {
+    name: String,
+    #[serde(default)]
+    description: String,
+    #[serde(default)]
+    category: String,
+}
+
+async fn save_clinical_preset(State(app): S, Json(b): Json<PresetIn>) -> Response {
+    match app.save_clinical_preset(&b.name, &b.description, &b.category) {
+        Ok(id) => Json(json!({"id": format!("c:{id}")})).into_response(),
+        Err(e) => err(e),
+    }
+}
+
+async fn load_clinical_preset(State(app): S, Path(id): Path<String>) -> Response {
+    done(app.load_clinical_preset(&id))
+}
+
+async fn delete_clinical_preset(State(app): S, Path(id): Path<String>) -> Response {
+    done(app.delete_clinical_preset(&id))
 }
 
 async fn delete_recording(State(app): S, Path(id): Path<String>) -> Response {
@@ -381,12 +541,22 @@ async fn recording_wav(State(app): S, Path(id): Path<String>) -> Response {
 struct Range {
     start: Option<f32>,
     end: Option<f32>,
+    settings: Option<steroid_engine::analysis::AnalysisSettings>,
 }
 
 async fn analyze(State(app): S, Path(id): Path<String>, body: Option<Json<Range>>) -> Response {
     let r = body.map(|b| b.0).unwrap_or_default();
-    match tokio::task::spawn_blocking(move || app.analyze(&id, r.start, r.end)).await {
+    match tokio::task::spawn_blocking(move || app.analyze(&id, r.start, r.end, r.settings)).await {
         Ok(Ok(rep)) => Json(rep).into_response(),
+        Ok(Err(e)) => err(e),
+        Err(e) => err(e),
+    }
+}
+
+async fn tracks(State(app): S, Path(id): Path<String>, body: Option<Json<Range>>) -> Response {
+    let r = body.map(|b| b.0).unwrap_or_default();
+    match tokio::task::spawn_blocking(move || app.tracks(&id, r.settings)).await {
+        Ok(Ok(t)) => Json(&*t).into_response(),
         Ok(Err(e)) => err(e),
         Err(e) => err(e),
     }
@@ -526,6 +696,8 @@ enum ClientMsg {
     Move { node: String, x: f32, y: f32 },
     Mute { on: bool },
     Tap { src: u32 },
+    /// Live sonagram subscription; `win` = analysis window in seconds.
+    Live { on: bool, #[serde(default)] win: Option<f32> },
 }
 
 async fn client(app: Arc<App>, socket: WebSocket) {
@@ -549,6 +721,7 @@ async fn client(app: Arc<App>, socket: WebSocket) {
             }
         }
     });
+    let mut live_on = false;
     while let Some(Ok(msg)) = rx.next().await {
         let Message::Text(t) = msg else { continue };
         let Ok(m) = serde_json::from_str::<ClientMsg>(t.as_str()) else { continue };
@@ -569,7 +742,23 @@ async fn client(app: Arc<App>, socket: WebSocket) {
             }
             ClientMsg::Mute { on } => app.set_mute(on),
             ClientMsg::Tap { src } => app.set_tap(src),
+            ClientMsg::Live { on, win } => {
+                if let Some(w) = win.filter(|w| w.is_finite()) {
+                    *app.live_window.lock().unwrap() = w.clamp(0.002, 0.05);
+                }
+                if on != live_on {
+                    live_on = on;
+                    if on {
+                        app.live_subs.fetch_add(1, Ordering::Relaxed);
+                    } else {
+                        app.live_subs.fetch_sub(1, Ordering::Relaxed);
+                    }
+                }
+            }
         }
+    }
+    if live_on {
+        app.live_subs.fetch_sub(1, Ordering::Relaxed);
     }
     send_task.abort();
 }

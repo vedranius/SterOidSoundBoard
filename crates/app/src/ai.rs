@@ -5,7 +5,7 @@
 //! The AI never receives audio: it gets the acoustic measurements, a
 //! pseudonymised patient profile (no name, code or birth date), the
 //! clinician's notes and, optionally, the sonagram image.
-use crate::clinic::{AiReport, PatientIn, Recording};
+use crate::clinic::{AiReport, AnnotationSummary, PatientIn, Recording};
 use anyhow::{anyhow, bail, Result};
 use base64::Engine;
 use serde::{Deserialize, Serialize};
@@ -143,6 +143,10 @@ pub struct Context<'a> {
     pub history: &'a [(String, String, VoiceReport)],
     pub question: &'a str,
     pub has_image: bool,
+    /// Disfluency labels made by the clinician on this recording.
+    pub annotations: Option<&'a AnnotationSummary>,
+    /// dB SPL = Praat dB + offset, when the microphone is calibrated.
+    pub calibration_db: Option<f32>,
 }
 
 pub const SYSTEM_PROMPT: &str = "\
@@ -180,8 +184,10 @@ fn opt(v: Option<f32>, d: usize, unit: &str) -> String {
     v.map(|x| format!("{x:.d$} {unit}").trim_end().to_string()).unwrap_or_else(|| "nije izmjereno".into())
 }
 
-fn measures(s: &mut String, r: &VoiceReport) {
-    let _ = writeln!(s, "- Trajanje: {:.2} s; zvučni dio: {:.0} %", r.duration, r.voiced_fraction * 100.0);
+fn measures(s: &mut String, r: &VoiceReport, cal: Option<f32>) {
+    let st = &r.settings;
+    let _ = writeln!(s, "- Algoritmi Praata (validirano podudaranje s Praatom 7); raspon F0 {:.0}–{:.0} Hz, maks. formant {:.0} Hz", st.pitch_floor, st.pitch_ceiling, st.max_formant);
+    let _ = writeln!(s, "- Trajanje: {:.2} s; zvučni dio: {:.0} %; udio lokalno bezvučnih okvira {:.1} %", r.duration, r.voiced_fraction * 100.0, r.unvoiced_fraction);
     let _ = writeln!(
         s,
         "- F0 srednja: {}; medijan {}; SD {}; min {}; max {}; raspon (5.–95. pct.) {}",
@@ -194,23 +200,45 @@ fn measures(s: &mut String, r: &VoiceReport) {
     );
     let _ = writeln!(
         s,
-        "- Jitter local: {} (norma < {} %); jitter abs: {}; jitter RAP: {}",
-        opt(r.jitter_local, 2, "%"),
+        "- Jitter local: {} (norma < {} %); abs: {}; RAP: {}; PPQ5: {}; DDP: {}",
+        opt(r.jitter_local, 3, "%"),
         analysis::JITTER_MAX,
         opt(r.jitter_abs_us, 1, "µs"),
-        opt(r.jitter_rap, 2, "%")
+        opt(r.jitter_rap, 3, "%"),
+        opt(r.jitter_ppq5, 3, "%"),
+        opt(r.jitter_ddp, 3, "%")
     );
     let _ = writeln!(
         s,
-        "- Shimmer local: {} (norma < {} %); shimmer dB: {} (norma < {} dB)",
-        opt(r.shimmer_local, 2, "%"),
+        "- Shimmer local: {} (norma < {} %); dB: {} (norma < {} dB); APQ3: {}; APQ5: {}; APQ11: {}; DDA: {}",
+        opt(r.shimmer_local, 3, "%"),
         analysis::SHIMMER_MAX,
         opt(r.shimmer_db, 3, "dB"),
-        analysis::SHIMMER_DB_MAX
+        analysis::SHIMMER_DB_MAX,
+        opt(r.shimmer_apq3, 3, "%"),
+        opt(r.shimmer_apq5, 3, "%"),
+        opt(r.shimmer_apq11, 3, "%"),
+        opt(r.shimmer_dda, 3, "%")
     );
-    let _ = writeln!(s, "- HNR: {} (norma > {} dB); intenzitet zvučnog dijela: {}", opt(r.hnr_db, 1, "dB"), analysis::HNR_MIN, opt(r.intensity_dbfs, 1, "dBFS"));
-    let _ = writeln!(s, "- Broj analiziranih glotalnih perioda: {}", r.periods);
-    let _ = writeln!(s, "- Najduža neprekinuta fonacija: {:.2} s; prekidi zvučnosti: {} (udio {:.1} %)", r.max_voiced_s, r.voice_breaks, r.voice_break_degree);
+    let _ = writeln!(s, "- HNR: {} (norma > {} dB); NHR: {}; srednja autokorelacija: {}", opt(r.hnr_db, 2, "dB"), analysis::HNR_MIN, opt(r.nhr, 4, ""), opt(r.mean_autocorrelation, 4, ""));
+    let _ = writeln!(s, "- CPPS (postavke AVQI protokola): {}", opt(r.cpps, 2, "dB"));
+    let _ = writeln!(s, "- Formanti (medijan zvučnih okvira): F1 {}, F2 {}, F3 {}, F4 {}", opt(r.formants[0], 0, "Hz"), opt(r.formants[1], 0, "Hz"), opt(r.formants[2], 0, "Hz"), opt(r.formants[3], 0, "Hz"));
+    let _ = writeln!(s, "- Glotalni pulsevi: {}; periode: {}; srednja perioda {}", r.pulses, r.periods, opt(r.mean_period_ms, 3, "ms"));
+    match cal {
+        Some(c) => {
+            let _ = writeln!(
+                s,
+                "- Intenzitet (kalibrirano, dB SPL): srednji {}, raspon {}–{}",
+                opt(r.intensity_mean_db.map(|v| v + c), 1, "dB"),
+                opt(r.intensity_min_db.map(|v| v + c), 1, "dB"),
+                opt(r.intensity_max_db.map(|v| v + c), 1, "dB")
+            );
+        }
+        None => {
+            let _ = writeln!(s, "- Intenzitet (NEKALIBRIRANO, Praat skala): srednji {}, SD {}", opt(r.intensity_mean_db, 1, "dB"), opt(r.intensity_sd_db, 1, "dB"));
+        }
+    }
+    let _ = writeln!(s, "- Najduža neprekinuta fonacija: {:.2} s; prekidi zvučnosti: {} (stupanj {:.1} %)", r.max_voiced_s, r.voice_breaks, r.voice_break_degree);
     let _ = writeln!(s, "- Pauze ≥ 250 ms: {} (prosjek {:.2} s; {:.1} % trajanja)", r.pauses, r.pause_mean_s, r.pause_ratio);
     let _ = writeln!(
         s,
@@ -277,8 +305,22 @@ pub fn build_prompt(c: &Context) -> (String, String) {
         let _ = writeln!(s, "- Opažanja rehabilitatora tijekom snimanja: {}", c.rec.notes.trim());
     }
     s.push_str("\n# Akustičke mjere (odsječak)\n");
-    measures(&mut s, c.report);
+    measures(&mut s, c.report, c.calibration_db);
     let _ = writeln!(s, "- F0 kontura po desetinama odsječka (Hz): {}", contour(c.report));
+    if let Some(a) = c.annotations {
+        s.push_str("\n# Oznake disfluencija (rehabilitator, cijela snimka)\n");
+        let _ = writeln!(s, "- Ukupno oznaka: {} ({:.1} u minuti); disfluencije tipične za mucanje (SLD): {}", a.total, a.per_minute, a.sld);
+        if let Some(p) = a.pct_ss {
+            let _ = writeln!(s, "- %SS: {:.1} % ({} slogova, izvor: {})", p, a.syllables.unwrap_or(0), a.syllables_source);
+        }
+        if let Some(d) = a.longest3_mean_s {
+            let _ = writeln!(s, "- Prosječno trajanje 3 najduže SLD: {d:.2} s");
+        }
+        let kinds: Vec<String> = a.by_kind.iter().map(|(k, n)| format!("{k}: {n}")).collect();
+        if !kinds.is_empty() {
+            let _ = writeln!(s, "- Po vrsti: {}", kinds.join("; "));
+        }
+    }
     if !c.history.is_empty() {
         s.push_str("\n# Prethodne snimke istog pacijenta (cijele snimke, od starije prema novijoj)\n");
         for (date, task, r) in c.history {
@@ -551,6 +593,8 @@ mod tests {
             source: "in".into(),
             task: "Produženi vokal /a/".into(),
             notes: "tvrdi počeci".into(),
+            annotations: vec![],
+            syllables: None,
         }
     }
 
@@ -578,6 +622,8 @@ mod tests {
             history: &hist,
             question: "Je li HNR zabrinjavajući?",
             has_image: true,
+            annotations: None,
+            calibration_db: None,
         });
         for secret in ["Ivan", "Horvat", "MBO-123456", "1980-05-01"] {
             assert!(!user.contains(secret) && !sys.contains(secret), "leaked {secret}");

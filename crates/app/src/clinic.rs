@@ -3,6 +3,7 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering::Relaxed};
+use steroid_engine::analysis::AnalysisSettings;
 use steroid_engine::Board;
 
 pub fn now_ms() -> u64 {
@@ -122,6 +123,9 @@ pub struct Session {
     /// Board (all settings) at session start.
     #[serde(default)]
     pub board: Option<Board>,
+    /// Name of the clinical preset loaded when the session started.
+    #[serde(default)]
+    pub preset: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -144,6 +148,164 @@ pub struct Recording {
     /// Clinician's observations for this recording.
     #[serde(default)]
     pub notes: String,
+    /// Time-aligned labels (disfluencies, events) — exported as a Praat TextGrid.
+    #[serde(default)]
+    pub annotations: Vec<Annotation>,
+    /// Syllable count entered by the clinician (overrides the automatic
+    /// syllable-nuclei estimate for %SS).
+    #[serde(default)]
+    pub syllables: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Annotation {
+    pub id: String,
+    pub start: f32,
+    pub end: f32,
+    /// One of ANNOTATION_KINDS (ids).
+    pub kind: String,
+    #[serde(default)]
+    pub text: String,
+}
+
+/// (id, Croatian label, stuttering-like disfluency?)
+pub const ANNOTATION_KINDS: &[(&str, &str, bool)] = &[
+    ("blok", "Blok", true),
+    ("produljenje", "Produljenje glasa", true),
+    ("ponavljanje_glasa", "Ponavljanje glasa", true),
+    ("ponavljanje_sloga", "Ponavljanje sloga", true),
+    ("ponavljanje_rijeci", "Ponavljanje jednosložne riječi", true),
+    ("umetak", "Umetak / poštapalica", false),
+    ("revizija", "Revizija / prekinuta riječ", false),
+    ("tvrdi_pocetak", "Tvrdi početak fonacije", false),
+    ("prekid_glasa", "Prekid / pucanje glasa", false),
+    ("sapat", "Šapat / afonija", false),
+    ("pratece", "Prateće ponašanje", false),
+    ("ostalo", "Ostalo", false),
+];
+
+pub fn kind_label(kind: &str) -> &str {
+    ANNOTATION_KINDS.iter().find(|k| k.0 == kind).map(|k| k.1).unwrap_or(kind)
+}
+
+/// Disfluency summary of a recording's annotations.
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct AnnotationSummary {
+    pub total: usize,
+    /// Stuttering-like disfluencies (blocks, prolongations, sound/syllable/word repetitions).
+    pub sld: usize,
+    pub per_minute: f32,
+    /// % syllables stuttered (SLD / syllables × 100), when a syllable count is known.
+    pub pct_ss: Option<f32>,
+    pub syllables: Option<u32>,
+    pub syllables_source: &'static str,
+    /// Mean duration of the three longest SLD, s (SSI-4 duration component).
+    pub longest3_mean_s: Option<f32>,
+    pub by_kind: Vec<(String, usize)>,
+}
+
+pub fn summarize(rec: &Recording, auto_syllables: Option<usize>) -> AnnotationSummary {
+    let mut s = AnnotationSummary { total: rec.annotations.len(), ..Default::default() };
+    let is_sld = |k: &str| ANNOTATION_KINDS.iter().any(|x| x.0 == k && x.2);
+    let mut durs: Vec<f32> = rec.annotations.iter().filter(|a| is_sld(&a.kind)).map(|a| a.end - a.start).collect();
+    s.sld = durs.len();
+    if rec.duration > 0.0 {
+        s.per_minute = s.total as f32 / rec.duration * 60.0;
+    }
+    let (syl, src) = match (rec.syllables, auto_syllables) {
+        (Some(n), _) if n > 0 => (Some(n), "rehabilitator"),
+        (_, Some(n)) if n > 0 => (Some(n as u32), "automatska procjena (slogovne jezgre)"),
+        _ => (None, ""),
+    };
+    s.syllables = syl;
+    s.syllables_source = src;
+    s.pct_ss = syl.map(|n| s.sld as f32 / n as f32 * 100.0);
+    durs.sort_by(|a, b| b.total_cmp(a));
+    if !durs.is_empty() {
+        let k = durs.len().min(3);
+        s.longest3_mean_s = Some(durs[..k].iter().sum::<f32>() / k as f32);
+    }
+    for (id, label, _) in ANNOTATION_KINDS {
+        let n = rec.annotations.iter().filter(|a| a.kind == *id).count();
+        if n > 0 {
+            s.by_kind.push((label.to_string(), n));
+        }
+    }
+    s
+}
+
+fn tg_escape(t: &str) -> String {
+    t.replace('"', "\"\"")
+}
+
+/// Praat TextGrid (long text format). Overlapping labels go to extra tiers.
+pub fn textgrid(rec: &Recording) -> String {
+    use std::fmt::Write;
+    let dur = rec.duration.max(rec.annotations.iter().fold(0.0, |m, a| m.max(a.end))) as f64;
+    let mut anns: Vec<&Annotation> = rec.annotations.iter().filter(|a| a.end > a.start).collect();
+    anns.sort_by(|a, b| a.start.total_cmp(&b.start));
+    let mut tiers: Vec<Vec<&Annotation>> = vec![];
+    for a in anns {
+        match tiers.iter_mut().find(|t| t.last().is_none_or(|l| l.end <= a.start)) {
+            Some(t) => t.push(a),
+            None => tiers.push(vec![a]),
+        }
+    }
+    if tiers.is_empty() {
+        tiers.push(vec![]);
+    }
+    let mut s = String::new();
+    let _ = write!(
+        s,
+        "File type = \"ooTextFile\"\nObject class = \"TextGrid\"\n\nxmin = 0 \nxmax = {dur} \ntiers? <exists> \nsize = {} \nitem []: \n",
+        tiers.len()
+    );
+    for (ti, tier) in tiers.iter().enumerate() {
+        // fill gaps with empty intervals
+        let mut iv: Vec<(f64, f64, String)> = vec![];
+        let mut t = 0.0f64;
+        for a in tier {
+            let (a0, a1) = (a.start as f64, (a.end as f64).min(dur));
+            if a0 > t {
+                iv.push((t, a0, String::new()));
+            }
+            let text = if a.text.is_empty() { kind_label(&a.kind).to_string() } else { format!("{}: {}", kind_label(&a.kind), a.text) };
+            iv.push((a0.max(t), a1, text));
+            t = a1;
+        }
+        if t < dur {
+            iv.push((t, dur, String::new()));
+        }
+        let name = if ti == 0 { "disfluencije".to_string() } else { format!("disfluencije {}", ti + 1) };
+        let _ = write!(
+            s,
+            "    item [{}]:\n        class = \"IntervalTier\" \n        name = \"{name}\" \n        xmin = 0 \n        xmax = {dur} \n        intervals: size = {} \n",
+            ti + 1,
+            iv.len()
+        );
+        for (k, (a, b, text)) in iv.iter().enumerate() {
+            let _ = write!(
+                s,
+                "        intervals [{}]:\n            xmin = {a} \n            xmax = {b} \n            text = \"{}\" \n",
+                k + 1,
+                tg_escape(text)
+            );
+        }
+    }
+    s
+}
+
+/// Clinic-wide settings.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct ClinicSettings {
+    /// Shown in report headers.
+    pub clinic_name: String,
+    pub clinician: String,
+    /// Default acoustic-analysis parameters.
+    pub analysis: AnalysisSettings,
+    /// dB SPL = Praat dB + offset (microphone calibration); None = uncalibrated.
+    pub calibration_db: Option<f32>,
 }
 
 /// An AI opinion on a recording, kept with the patient's records.
@@ -177,6 +339,8 @@ pub struct Clinic {
     pub recordings: Vec<Recording>,
     #[serde(default)]
     pub ai_reports: Vec<AiReport>,
+    #[serde(default)]
+    pub settings: ClinicSettings,
 }
 
 impl Clinic {
@@ -230,6 +394,52 @@ mod tests {
         assert!(safe_name("..").is_none());
     }
 
+    fn rec_with(anns: Vec<(f32, f32, &str)>) -> Recording {
+        Recording {
+            id: "r".into(),
+            patient_id: None,
+            session_id: None,
+            label: String::new(),
+            created: 0,
+            duration: 30.0,
+            sample_rate: 48000,
+            source: "in".into(),
+            task: String::new(),
+            notes: String::new(),
+            annotations: anns
+                .into_iter()
+                .enumerate()
+                .map(|(i, (a, b, k))| Annotation { id: format!("a{i}"), start: a, end: b, kind: k.into(), text: String::new() })
+                .collect(),
+            syllables: None,
+        }
+    }
+
+    #[test]
+    fn stuttering_summary() {
+        let r = rec_with(vec![(1.0, 2.5, "blok"), (4.0, 4.4, "ponavljanje_sloga"), (6.0, 6.3, "umetak"), (9.0, 10.0, "produljenje")]);
+        let s = summarize(&r, Some(100));
+        assert_eq!((s.total, s.sld), (4, 3));
+        assert!((s.pct_ss.unwrap() - 3.0).abs() < 1e-6);
+        assert!((s.longest3_mean_s.unwrap() - (1.5 + 1.0 + 0.4) / 3.0).abs() < 1e-6);
+        assert!((s.per_minute - 8.0).abs() < 1e-6);
+        let mut r2 = r.clone();
+        r2.syllables = Some(150);
+        assert!((summarize(&r2, Some(100)).pct_ss.unwrap() - 2.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn textgrid_splits_overlaps() {
+        let r = rec_with(vec![(1.0, 3.0, "blok"), (2.0, 2.5, "pratece"), (5.0, 6.0, "umetak")]);
+        let tg = textgrid(&r);
+        assert!(tg.starts_with("File type = \"ooTextFile\""));
+        assert!(tg.contains("size = 2"), "{tg}");
+        assert!(tg.contains("text = \"Blok\""));
+        assert!(tg.contains("name = \"disfluencije 2\""));
+        // first tier: [0,1] "" [1,3] Blok [3,5] "" [5,6] Umetak [6,30] ""
+        assert!(tg.contains("intervals: size = 5"));
+    }
+
     #[test]
     fn ages() {
         let d = |y: i64, m: u32, dd: u32| {
@@ -260,7 +470,7 @@ mod tests {
         let mut c = Clinic::default();
         for id in ["a", "b"] {
             c.patients.push(Patient { id: id.into(), data: PatientIn { name: id.into(), ..Default::default() }, created: 0, updated: 0 });
-            c.sessions.push(Session { id: format!("s{id}"), patient_id: id.into(), start: 0, end: None, notes: String::new(), board: None });
+            c.sessions.push(Session { id: format!("s{id}"), patient_id: id.into(), start: 0, end: None, notes: String::new(), board: None, preset: None });
             c.recordings.push(Recording {
                 id: format!("r{id}"),
                 patient_id: Some(id.into()),
@@ -272,6 +482,8 @@ mod tests {
                 source: "in".into(),
                 task: String::new(),
                 notes: String::new(),
+                annotations: vec![],
+                syllables: None,
             });
         }
         assert_eq!(c.remove_patient("a"), vec!["ra".to_string()]);
