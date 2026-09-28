@@ -67,6 +67,12 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/ai/test", post(ai_test))
         .route("/api/recordings/{id}/ai/preview", post(ai_preview).layer(DefaultBodyLimit::max(12 << 20)))
         .route("/api/recordings/{id}/ai", get(ai_list).post(ai_run).layer(DefaultBodyLimit::max(12 << 20)))
+        .route("/api/ai/tasks", get(ai_tasks))
+        .route("/api/ai/tasks/{id}", get(ai_task))
+        .route("/api/ai/tasks/{id}/cancel", post(ai_cancel))
+        .route("/api/ai/ollama", get(ollama_status))
+        .route("/api/ai/ollama/pull", post(ollama_pull))
+        .route("/api/ai/ollama/delete", post(ollama_delete))
         .route("/api/ai-reports/{id}", delete(ai_delete))
         .route("/ws", get(ws))
         .fallback(static_file)
@@ -581,6 +587,8 @@ struct AiConfigIn {
     clear_key: bool,
     #[serde(default = "yes")]
     send_image: bool,
+    #[serde(default)]
+    ollama_ctx: u32,
 }
 fn yes() -> bool {
     true
@@ -600,6 +608,7 @@ async fn set_ai_config(State(app): S, Json(b): Json<AiConfigIn>) -> Response {
     cfg.base_url = base.chars().take(500).collect();
     cfg.model = b.model.trim().chars().take(200).collect();
     cfg.send_image = b.send_image;
+    cfg.ollama_ctx = if b.ollama_ctx == 0 { 0 } else { b.ollama_ctx.clamp(2048, 131_072) };
     if b.clear_key || provider_changed {
         cfg.api_key.clear(); // a key never silently follows a switch to another service
     }
@@ -653,16 +662,106 @@ async fn ai_preview(State(app): S, Path(id): Path<String>, Json(b): Json<AiReq>)
     }
 }
 
+/// Starts the AI opinion in the background and returns its task id; the log,
+/// streamed text and result arrive as `ai_task` WebSocket events.
 async fn ai_run(State(app): S, Path(id): Path<String>, Json(b): Json<AiReq>) -> Response {
     let q: String = b.question.chars().take(4000).collect();
     let r = tokio::task::spawn_blocking(move || {
         let job = app.ai_job(&id, b.start, b.end, b.settings, &q, b.image.as_deref())?;
-        app.ai_run(job, &q)
+        app.ai_start(job, q)
     })
     .await;
     match r {
-        Ok(Ok(rep)) => Json(rep).into_response(),
+        Ok(Ok(task)) => Json(json!({"task": task})).into_response(),
         Ok(Err(e)) => err(e),
+        Err(e) => err(e),
+    }
+}
+
+#[derive(Deserialize)]
+struct ByRecording {
+    recording: Option<String>,
+}
+
+/// A task as JSON plus its age, so browsers need not trust the server's clock.
+fn task_json(t: &crate::state::AiTask) -> Value {
+    let mut v = json!(t);
+    v["age_ms"] = json!(clinic::now_ms().saturating_sub(t.started));
+    v
+}
+
+async fn ai_tasks(State(app): S, Query(q): Query<ByRecording>) -> Json<Value> {
+    let tasks = app.ai_tasks.lock().unwrap();
+    Json(json!(tasks.iter().filter(|t| q.recording.is_none() || t.recording_id == q.recording).map(task_json).collect::<Vec<_>>()))
+}
+
+async fn ai_task(State(app): S, Path(id): Path<String>) -> Response {
+    let tasks = app.ai_tasks.lock().unwrap();
+    match tasks.iter().find(|t| t.id == id) {
+        Some(t) => Json(task_json(t)).into_response(),
+        None => err("nema tog zadatka"),
+    }
+}
+
+async fn ai_cancel(State(app): S, Path(id): Path<String>) -> Response {
+    done(app.cancel_task(&id))
+}
+
+#[derive(Deserialize)]
+struct OllamaUrl {
+    url: Option<String>,
+}
+
+/// Ollama status for the settings panel; `url` lets the panel check an
+/// address before it is saved.
+async fn ollama_status(State(app): S, Query(q): Query<OllamaUrl>) -> Response {
+    let url = match q.url.map(|u| u.trim().to_string()).filter(|u| !u.is_empty()) {
+        Some(u) if u.starts_with("http://") || u.starts_with("https://") => u,
+        Some(_) => return err("adresa mora počinjati s http:// ili https://"),
+        None => {
+            let c = app.ai.lock().unwrap();
+            if c.provider == "ollama" { c.base_url.clone() } else { String::new() }
+        }
+    };
+    let root = crate::ollama::root(&url);
+    Json(tokio::task::spawn_blocking(move || crate::ollama::status(&root)).await.unwrap_or(Value::Null)).into_response()
+}
+
+#[derive(Deserialize)]
+struct ModelName {
+    model: String,
+}
+
+fn check_model_name(m: &str) -> Result<String, &'static str> {
+    let m = m.trim();
+    if m.is_empty() || m.len() > 200 || !m.chars().all(|c| c.is_ascii_alphanumeric() || "._:/-".contains(c)) {
+        return Err("neispravan naziv modela");
+    }
+    Ok(m.to_string())
+}
+
+async fn ollama_pull(State(app): S, Json(b): Json<ModelName>) -> Response {
+    let model = match check_model_name(&b.model) {
+        Ok(m) => m,
+        Err(e) => return err(e),
+    };
+    match app.ollama_pull(model) {
+        Ok(task) => Json(json!({"task": task})).into_response(),
+        Err(e) => err(e),
+    }
+}
+
+async fn ollama_delete(State(app): S, Json(b): Json<ModelName>) -> Response {
+    let model = match check_model_name(&b.model) {
+        Ok(m) => m,
+        Err(e) => return err(e),
+    };
+    let root = {
+        let c = app.ai.lock().unwrap();
+        crate::ollama::root(if c.provider == "ollama" { &c.base_url } else { "" })
+    };
+    match tokio::task::spawn_blocking(move || crate::ollama::delete(&root, &model)).await {
+        Ok(r) => done(r),
         Err(e) => err(e),
     }
 }

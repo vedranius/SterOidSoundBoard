@@ -33,8 +33,11 @@ DigiLingua UI text is Croatian; Music UI is English.
 - `crates/app` (steroidsoundboard): `main.rs` args/startup, `state.rs` App state (presets, recording,
   clinic ops, AI jobs; lock order `inner` → `clinic`), `clinic.rs` patients/sessions/recordings/
   AI-report store, `ai.rs` AI providers (Anthropic Messages API raw HTTP via ureq+rustls/ring,
-  default `claude-opus-5` + `fallbacks: "default"`; OpenAI-compatible; Ollama) and the Croatian
-  clinical prompt (pseudonymised: never name/code/birth date), `server.rs` axum REST + WS.
+  default `claude-opus-5` + `fallbacks: "default"`; OpenAI-compatible SSE streaming) + `Progress`
+  trait, and the Croatian clinical prompt (pseudonymised: never name/code/birth date), `ollama.rs`
+  native Ollama API (status/models/ps/show/pull/delete, streamed /api/chat with sized num_ctx),
+  AI runs as background tasks in `state.rs` (`ai_tasks`, log/delta/stats/end WS events with
+  positions `n`/`at`, cancel), `server.rs` axum REST + WS.
 - `web/` vanilla JS UI, embedded with rust-embed: `app.js` core + pedalboard (HOOKS, setParam,
   setBypass shared by views), `sono.js` colour maps/axes/legend + LiveSono widget, `editor.js`
   Praat-style SoundEditor, `clinic.js` DigiLingua workstation (patients, sessions, presets, devices,
@@ -57,6 +60,7 @@ v0.4.0 Praat-compatible engine (validated), Praat-style editor + annotations/Tex
 with legend, DigiLingua workstation (patient list, clinical presets, devices/status, EQ sliders,
 chain, per-ear mute, sessions detail/apply, progress charts/CSV, clinic settings + SPL calibration,
 print/PDF report).
+v0.4.1 Ollama built in (model manager, pull with progress, GPU/CPU share), live AI log + streaming + stop.
 No auth yet (patient data + AI key on LAN!) — PIN/login is top priority in 0.5.
 Tags can't be pushed from Claude's cloud sessions (git proxy): Vedran pushes `vX.Y.Z` himself.
 

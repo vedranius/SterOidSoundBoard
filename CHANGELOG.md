@@ -2,6 +2,34 @@
 
 All notable changes are documented here. Versioning: [SemVer](https://semver.org).
 
+## [0.4.1] - 2026-09-28
+
+Local AI with **Ollama built in** and a **live AI log**, so you can see what the AI is doing.
+
+### Added
+- **Ollama manager** in the AI settings: server status and version, installed models (size,
+  parameters, quantisation, context, 👁 = reads images), one-click "Koristi", delete, models in
+  memory with their **GPU/CPU share**, recommended models by graphics-card memory (gemma3:4b,
+  qwen2.5vl:3b, llama3.2:3b, qwen2.5:7b, qwen2.5vl:7b, gemma3:12b, llama3.2-vision) and
+  **download from the app** (`ollama pull`) with a progress bar; context size (automatic or fixed).
+  A running Ollama is detected even when another AI service is selected.
+- **Live AI log** in the analysis window: what is sent (prompt size, image, context), model
+  loading and where it landed (e.g. "72 % GPU, 28 % CPU — sporije"), time to the first word,
+  tokens and tokens/s while writing, final timing (loading, prompt, answer), warnings when the
+  context is too small. The answer **appears word by word**; **■ Zaustavi** stops it.
+- AI runs as a background task: closing the analysis window does not stop it, reopening the
+  recording follows it again (or shows why the last attempt failed); "AI ⏳" in the header while
+  it works. OpenAI-compatible servers also stream; Claude logs sending, waiting and token usage.
+
+### Fixed
+- Ollama never answered on slower PCs: requests went through the OpenAI-compatible endpoint
+  without streaming and gave up after 10 minutes of silence (then retried), and Ollama's default
+  context (2–4k tokens) silently cut the clinical prompt. Now the native API streams, the context
+  is sized to the prompt, and waiting for the first word may take up to 30 minutes.
+- Default local model is now `gemma3:4b` (fits 6 GB graphics cards and reads the sonagram);
+  images are downscaled for local models and not sent to models without vision.
+- Ollama's address defaults to `http://127.0.0.1:11434` (older `…/v1` settings keep working).
+
 ## [0.4.0] - 2026-09-28
 
 DigiLingua becomes a clinical workstation: **Praat-compatible voice analysis** (validated against

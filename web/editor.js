@@ -490,8 +490,13 @@ const Editor = (() => {
         if (changed) { await this.loadTracks(); this.opts.onSettings && this.opts.onSettings(na); }
       };
     }
-    /** JPEG snapshot of the editor view (for the AI and printed reports). */
-    snapshot(q = 0.85) { return this.cv.toDataURL("image/jpeg", q); }
+    /** JPEG snapshot of the editor view (for the AI and printed reports), at most `maxW` px wide. */
+    snapshot(q = 0.85, maxW = 0) {
+      if (!maxW || this.cv.width <= maxW) return this.cv.toDataURL("image/jpeg", q);
+      const c = document.createElement("canvas"); c.width = maxW; c.height = Math.round(this.cv.height * maxW / this.cv.width);
+      const g = c.getContext("2d"); g.imageSmoothingQuality = "high"; g.drawImage(this.cv, 0, 0, c.width, c.height);
+      return c.toDataURL("image/jpeg", q);
+    }
   }
   return { SoundEditor, kinds, kindLabel, KIND_COLORS };
 })();

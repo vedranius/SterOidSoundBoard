@@ -1,6 +1,7 @@
 //! SterOidSoundBoard — one executable: audio engine + web server + UI.
 mod ai;
 mod clinic;
+mod ollama;
 mod server;
 mod state;
 

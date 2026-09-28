@@ -77,6 +77,111 @@ pub struct App {
     /// Clients currently showing a live sonagram, and the requested window (s).
     pub live_subs: std::sync::atomic::AtomicUsize,
     pub live_window: Mutex<f32>,
+    /// AI opinions and model downloads running in the background (and recent ones).
+    pub ai_tasks: Mutex<Vec<AiTask>>,
+}
+
+/// A background AI job with its log, streamed text and outcome.
+#[derive(Clone, serde::Serialize)]
+pub struct AiTask {
+    pub id: String,
+    /// "report" (AI opinion) or "pull" (Ollama model download).
+    pub kind: String,
+    pub recording_id: Option<String>,
+    /// Model name.
+    pub label: String,
+    pub started: u64,
+    /// running, done, error or cancelled.
+    pub status: String,
+    /// (milliseconds since start, message)
+    pub log: Vec<(u64, String)>,
+    pub text: String,
+    pub stats: serde_json::Value,
+    pub report: Option<AiReport>,
+    pub error: Option<String>,
+    #[serde(skip)]
+    cancel: Arc<AtomicBool>,
+}
+
+const MAX_TASKS: usize = 30;
+
+/// Progress sink of one task: stores everything and forwards it to the
+/// browsers (text in batches, so a fast model does not flood the socket).
+struct TaskProgress {
+    app: Arc<App>,
+    id: String,
+    t0: std::time::Instant,
+    cancel: Arc<AtomicBool>,
+    pending: Mutex<Pending>,
+}
+
+/// Streamed text not yet sent to the browsers; `sent` counts characters
+/// already sent, so a browser that loaded the task meanwhile can skip overlaps.
+struct Pending {
+    buf: String,
+    last: std::time::Instant,
+    sent: usize,
+}
+
+impl TaskProgress {
+    fn with_task(&self, f: impl FnOnce(&mut AiTask)) {
+        if let Some(t) = self.app.ai_tasks.lock().unwrap().iter_mut().find(|t| t.id == self.id) {
+            f(t);
+        }
+    }
+    fn flush(&self) {
+        let (text, at) = {
+            let mut p = self.pending.lock().unwrap();
+            let text = std::mem::take(&mut p.buf);
+            let at = p.sent;
+            p.sent += text.chars().count();
+            p.last = std::time::Instant::now();
+            (text, at)
+        };
+        if !text.is_empty() {
+            self.app.emit(json!({"t": "ai_task", "id": self.id, "ev": "delta", "text": text, "at": at}));
+        }
+    }
+}
+
+impl ai::Progress for TaskProgress {
+    fn log(&self, msg: &str) {
+        let ms = self.t0.elapsed().as_millis() as u64;
+        self.flush();
+        let mut n = None;
+        self.with_task(|t| {
+            if t.log.len() < 1000 {
+                n = Some(t.log.len());
+                t.log.push((ms, msg.to_string()));
+            }
+        });
+        if let Some(n) = n {
+            self.app.emit(json!({"t": "ai_task", "id": self.id, "ev": "log", "n": n, "ms": ms, "msg": msg}));
+        }
+    }
+    fn delta(&self, text: &str) {
+        self.with_task(|t| {
+            if t.text.len() < 400_000 {
+                t.text.push_str(text);
+            }
+        });
+        let due = {
+            let mut p = self.pending.lock().unwrap();
+            p.buf.push_str(text);
+            p.last.elapsed() > std::time::Duration::from_millis(150)
+        };
+        if due {
+            self.flush();
+        }
+    }
+    fn stats(&self, v: serde_json::Value) {
+        self.flush();
+        self.with_task(|t| t.stats = v.clone());
+        self.app.emit(json!({"t": "ai_task", "id": self.id, "ev": "stats", "stats": v}));
+    }
+    fn cancelled(&self) -> bool {
+        self.cancel.load(Relaxed)
+    }
 }
 
 /// Saved custom clinical preset (file in `clinic_presets/`).
@@ -146,6 +251,7 @@ impl App {
             tracks: Mutex::new(vec![]),
             live_subs: std::sync::atomic::AtomicUsize::new(0),
             live_window: Mutex::new(0.005),
+            ai_tasks: Mutex::new(vec![]),
         })
     }
 
@@ -688,16 +794,136 @@ impl App {
     }
 
     /// Run the job against the configured provider and store the opinion.
-    pub fn ai_run(&self, job: AiJob, question: &str) -> Result<AiReport> {
-        let ans = ai::ask_report(&job.cfg, &job.system, &job.user, job.image.as_ref())?;
-        let rep = ai::new_report(&job.rec, &job.cfg, job.start, job.end, question, ans);
+    fn save_ai_report(&self, rep: &AiReport) -> Result<()> {
         let mut c = self.clinic.lock().unwrap();
-        if !c.recordings.iter().any(|r| r.id == job.rec.id) {
+        if !c.recordings.iter().any(|r| r.id == rep.recording_id) {
             return Err(anyhow!("snimka je u međuvremenu obrisana"));
         }
         c.ai_reports.push(rep.clone());
-        self.save_clinic(&c)?;
-        Ok(rep)
+        self.save_clinic(&c)
+    }
+
+    fn new_task(self: &Arc<Self>, kind: &str, recording_id: Option<String>, label: String) -> Result<(String, TaskProgress)> {
+        let mut tasks = self.ai_tasks.lock().unwrap();
+        if let Some(t) = tasks.iter().find(|t| t.status == "running" && t.kind == kind) {
+            return Err(anyhow!(if kind == "pull" {
+                format!("već se preuzima model {} — pričekajte da završi", t.label)
+            } else {
+                "AI već obrađuje drugi zahtjev — pričekajte ga ili ga zaustavite".to_string()
+            }));
+        }
+        let id = clinic::new_id("t");
+        let cancel = Arc::new(AtomicBool::new(false));
+        tasks.push(AiTask {
+            id: id.clone(),
+            kind: kind.into(),
+            recording_id,
+            label,
+            started: clinic::now_ms(),
+            status: "running".into(),
+            log: vec![],
+            text: String::new(),
+            stats: serde_json::Value::Null,
+            report: None,
+            error: None,
+            cancel: cancel.clone(),
+        });
+        let running = tasks.iter().filter(|t| t.status == "running").count();
+        while tasks.len() > MAX_TASKS.max(running) {
+            if let Some(i) = tasks.iter().position(|t| t.status != "running") {
+                tasks.remove(i);
+            } else {
+                break;
+            }
+        }
+        drop(tasks);
+        let prog = TaskProgress { app: self.clone(), id: id.clone(), t0: std::time::Instant::now(), cancel, pending: Mutex::new(Pending { buf: String::new(), last: std::time::Instant::now(), sent: 0 }) };
+        self.emit(json!({"t": "ai_task", "id": id, "ev": "start", "kind": kind}));
+        Ok((id, prog))
+    }
+
+    /// Record a task's outcome unless it was already cancelled.
+    fn finish_task(&self, id: &str, status: &str, report: Option<AiReport>, error: Option<String>) {
+        {
+            let mut tasks = self.ai_tasks.lock().unwrap();
+            let Some(t) = tasks.iter_mut().find(|t| t.id == id) else { return };
+            if t.status != "running" {
+                return;
+            }
+            t.status = status.into();
+            t.report = report.clone();
+            t.error = error.clone();
+        }
+        self.emit(json!({"t": "ai_task", "id": id, "ev": "end", "status": status, "report": report, "error": error}));
+    }
+
+    /// Start an AI opinion in the background; progress arrives as `ai_task` events.
+    pub fn ai_start(self: &Arc<Self>, job: AiJob, question: String) -> Result<String> {
+        let (id, prog) = self.new_task("report", Some(job.rec.id.clone()), job.cfg.model.trim().to_string())?;
+        let app = self.clone();
+        std::thread::Builder::new().name("ai".into()).spawn(move || {
+            use ai::Progress;
+            let res = ai::ask_report(&job.cfg, &job.system, &job.user, job.image.as_ref(), &prog);
+            prog.flush();
+            match res {
+                Ok(ans) => {
+                    if prog.cancelled() {
+                        return app.finish_task(&prog.id, "cancelled", None, None);
+                    }
+                    let rep = ai::new_report(&job.rec, &job.cfg, job.start, job.end, &question, ans);
+                    match app.save_ai_report(&rep) {
+                        Ok(()) => {
+                            prog.log("Mišljenje je spremljeno uz snimku.");
+                            app.finish_task(&prog.id, "done", Some(rep), None)
+                        }
+                        Err(e) => app.finish_task(&prog.id, "error", None, Some(e.to_string())),
+                    }
+                }
+                Err(_) if prog.cancelled() => app.finish_task(&prog.id, "cancelled", None, None),
+                Err(e) => {
+                    prog.log(&format!("Greška: {e:#}"));
+                    app.finish_task(&prog.id, "error", None, Some(format!("{e:#}")))
+                }
+            }
+        })?;
+        Ok(id)
+    }
+
+    /// Download an Ollama model in the background.
+    pub fn ollama_pull(self: &Arc<Self>, model: String) -> Result<String> {
+        let root = self.ai.lock().unwrap().clone();
+        let root = crate::ollama::root(if root.provider == "ollama" { &root.base_url } else { "" });
+        let (id, prog) = self.new_task("pull", None, model.clone())?;
+        let app = self.clone();
+        std::thread::Builder::new().name("ollama-pull".into()).spawn(move || {
+            use ai::Progress;
+            match crate::ollama::pull(&root, &model, &prog) {
+                Ok(()) => app.finish_task(&prog.id, "done", None, None),
+                Err(_) if prog.cancelled() => app.finish_task(&prog.id, "cancelled", None, None),
+                Err(e) => {
+                    prog.log(&format!("Greška: {e:#}"));
+                    app.finish_task(&prog.id, "error", None, Some(format!("{e:#}")))
+                }
+            }
+        })?;
+        Ok(id)
+    }
+
+    pub fn cancel_task(&self, id: &str) -> Result<()> {
+        let (cancel, ms, n) = {
+            let mut tasks = self.ai_tasks.lock().unwrap();
+            let t = tasks.iter_mut().find(|t| t.id == id).ok_or_else(|| anyhow!("nema tog zadatka"))?;
+            let ms = clinic::now_ms().saturating_sub(t.started);
+            let n = t.log.len();
+            if t.status == "running" {
+                t.log.push((ms, "Zaustavljeno na zahtjev korisnika.".into()));
+            }
+            (t.cancel.clone(), ms, n)
+        };
+        cancel.store(true, Relaxed);
+        self.emit(json!({"t": "ai_task", "id": id, "ev": "log", "n": n, "ms": ms, "msg": "Zaustavljeno na zahtjev korisnika."}));
+        self.finish_task(id, "cancelled", None, None);
+        Ok(())
     }
 
     pub fn meters_json(&self) -> String {

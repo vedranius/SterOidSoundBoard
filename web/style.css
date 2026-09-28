@@ -289,3 +289,22 @@ legend{color:var(--acc);font-size:12px;font-weight:600;padding:0 4px}
 }
 .tiles.busy{opacity:.45}
 fieldset > button{align-self:flex-start}
+/* ---- v0.4.1: Ollama manager, AI task log */
+.ollama{flex-basis:100%;display:flex;flex-direction:column;gap:8px}
+.ol-status{font-size:13px}.ol-status.ok{color:var(--ok)}.ol-status.bad{color:#ff9c9c}.ol-status a{color:#9fd0ff}
+.ol-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.ol-list{display:flex;flex-direction:column;gap:4px;max-height:300px;overflow:auto}
+.ol-item{display:flex;gap:6px;align-items:center;padding:5px 8px;border:1px solid var(--line);border-radius:8px;background:var(--card)}
+.ol-item.sel{border-color:var(--acc);box-shadow:inset 3px 0 0 var(--acc)}
+.tag.vis{background:#1d3a2a;color:#8fe0b0}
+.ol-pull{margin-top:8px}
+.bar{height:8px;background:#07090c;border:1px solid var(--line);border-radius:4px;overflow:hidden;margin:4px 0}
+.bar i{display:block;height:100%;width:0;background:var(--acc);transition:width .25s}
+.ai-run{margin-top:10px;border:1px solid var(--line);border-radius:8px;padding:8px;background:#0b0e12}
+.ai-log{margin:6px 0 0;max-height:220px;overflow:auto;white-space:pre-wrap;font:12px/1.45 ui-monospace,Consolas,monospace;color:#b8c2cf;background:#07090c;border-radius:6px;padding:6px 8px}
+.ai-log.folded{display:none}
+.ai-log:empty{display:none}
+.caret{animation:blink 1s steps(2) infinite;color:var(--acc)}
+@keyframes blink{50%{opacity:0}}
+#btnAi.busy{border-color:var(--acc);color:var(--acc)}
+@media (max-width:900px){.ol-grid{grid-template-columns:1fr}}

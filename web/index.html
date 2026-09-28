@@ -46,13 +46,27 @@
   <label>AI servis <select id="aiProvider">
     <option value="anthropic">Anthropic Claude</option>
     <option value="openai">OpenAI-kompatibilan (OpenAI, LM Studio, vLLM…)</option>
-    <option value="ollama">Ollama (lokalno, podaci ne napuštaju računalo)</option></select></label>
-  <label>Model <input id="aiModel" size="22"></label>
+    <option value="ollama">Ollama (lokalno, besplatno, podaci ne napuštaju računalo)</option></select></label>
+  <label>Model <input id="aiModel" size="22" list="aiModelList"><datalist id="aiModelList"></datalist></label>
   <label>Adresa <input id="aiUrl" size="30"></label>
-  <label>API ključ <input id="aiKey" type="password" size="24" autocomplete="off"></label>
+  <label id="aiKeyL">API ključ <input id="aiKey" type="password" size="24" autocomplete="off"></label>
   <label class="chk"><input type="checkbox" id="aiImage"> šalji sliku sonagrama</label>
   <button id="aiSave" class="pri">Spremi</button><button id="aiTest">Test veze</button><button id="aiClearKey">Obriši ključ</button>
   <div id="aiInfo" class="dim small" style="flex-basis:100%"></div>
+  <div id="aiOllama" class="ollama hidden">
+    <div class="row"><span id="olStatus" class="ol-status">Provjeravam Ollamu…</span><span class="grow"></span>
+      <label class="small">Kontekst <select id="olCtx"><option value="0">automatski (prema upitu)</option><option value="4096">4096</option><option value="8192">8192</option><option value="16384">16384</option><option value="32768">32768</option></select></label>
+      <button id="olRefresh" class="small">⟳ Osvježi</button></div>
+    <div class="ol-grid">
+      <div class="card2"><div class="h">Instalirani modeli</div><div id="olModels" class="ol-list"></div><div id="olLoaded" class="small dim"></div></div>
+      <div class="card2"><div class="h">Preporučeni modeli</div><div id="olRec" class="ol-list"></div>
+        <div class="row small" style="margin-top:8px"><input id="olPullName" placeholder="ili naziv s ollama.com/library, npr. qwen2.5:7b" class="grow"><button id="olPullBtn" class="small">⬇ Preuzmi</button></div>
+        <div id="olPull" class="ol-pull hidden"><div class="row small"><b id="olPullTitle" class="grow"></b><span id="olPullPct" class="mono"></span><button id="olPullStop" class="small">✕</button></div>
+          <div class="bar"><i id="olPullBar"></i></div><pre id="olPullLog" class="ai-log small"></pre></div>
+      </div>
+    </div>
+    <div class="dim small">Ollama radi na ovom računalu (ili drugom u mreži) — besplatno, bez API ključa, podaci ne izlaze van. Brzina ovisi o grafičkoj kartici: model mora stati u njezinu memoriju (VRAM), inače radi na procesoru i znatno je sporiji.</div>
+  </div>
 </section>
 
 <main id="music">
@@ -230,6 +244,10 @@
         <span class="grow"></span>
         <button id="anAiPreview">Pregled podataka za AI</button>
         <button id="anAiRun" class="pri">Pokreni AI analizu</button>
+      </div>
+      <div id="anAiRunBox" class="ai-run hidden">
+        <div class="row small"><span id="anAiState" class="mono grow"></span><button id="anAiStop" class="small danger">■ Zaustavi</button><button id="anAiLogToggle" class="small">Log</button></div>
+        <pre id="anAiLog" class="ai-log"></pre>
       </div>
       <div class="dim small" style="margin-top:6px">AI ne čuje snimku: dobiva izmjerene parametre, profil pacijenta bez imena, šifre i datuma rođenja, vaša opažanja i (po izboru) sliku sonagrama. Mišljenje je pomoć rehabilitatoru, ne dijagnoza.</div>
       <pre id="anAiPrompt" class="prompt hidden"></pre>

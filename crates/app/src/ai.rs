@@ -11,8 +11,9 @@ use base64::Engine;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::fmt::Write;
+use std::io::{BufRead, BufReader};
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use steroid_engine::analysis::{self, VoiceReport};
 
 pub const DEFAULT_CLAUDE_MODEL: &str = "claude-opus-5";
@@ -21,6 +22,23 @@ const ANTHROPIC_VERSION: &str = "2023-06-01";
 const FALLBACK_BETA: &str = "server-side-fallback-2026-07-01";
 const MAX_TOKENS: u32 = 16_000;
 const MAX_IMAGE_BYTES: usize = 5 << 20;
+
+/// Receives what an AI request is doing: log lines, streamed text, numbers.
+/// Called from the worker thread (and Ollama's load watcher), hence `Sync`.
+pub trait Progress: Sync {
+    fn log(&self, msg: &str);
+    fn delta(&self, _text: &str) {}
+    fn stats(&self, _v: Value) {}
+    fn cancelled(&self) -> bool {
+        false
+    }
+}
+
+/// No progress reporting (connection test).
+pub struct Silent;
+impl Progress for Silent {
+    fn log(&self, _msg: &str) {}
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -32,6 +50,8 @@ pub struct AiConfig {
     pub api_key: String,
     /// Attach the sonagram image (needs a vision-capable model).
     pub send_image: bool,
+    /// Ollama context size in tokens; 0 = automatic (prompt + answer).
+    pub ollama_ctx: u32,
 }
 
 impl Default for AiConfig {
@@ -42,6 +62,7 @@ impl Default for AiConfig {
             model: DEFAULT_CLAUDE_MODEL.into(),
             api_key: String::new(),
             send_image: true,
+            ollama_ctx: 0,
         }
     }
 }
@@ -65,13 +86,16 @@ impl AiConfig {
     }
 
     pub fn base(&self) -> String {
+        if self.provider == "ollama" {
+            return crate::ollama::root(&self.base_url);
+        }
         let b = self.base_url.trim().trim_end_matches('/');
         if !b.is_empty() {
             return b.to_string();
         }
         match self.provider.as_str() {
             "openai" => "https://api.openai.com/v1".into(),
-            "ollama" => "http://localhost:11434/v1".into(),
+            "ollama" => crate::ollama::DEFAULT_URL.into(),
             _ => "https://api.anthropic.com".into(),
         }
     }
@@ -93,7 +117,9 @@ impl AiConfig {
             "model": self.model,
             "has_key": !self.api_key.is_empty(),
             "send_image": self.send_image,
+            "ollama_ctx": self.ollama_ctx,
             "default_claude_model": DEFAULT_CLAUDE_MODEL,
+            "default_ollama_model": crate::ollama::DEFAULT_MODEL,
         })
     }
 
@@ -466,14 +492,20 @@ fn bypass_proxy_with(url: &str, no_proxy: &str) -> bool {
     })
 }
 
-fn agent(url: &str) -> ureq::Agent {
+/// HTTP agent; `read` bounds each socket read (for a non-streamed answer:
+/// the whole wait; when streaming: the pause between two pieces).
+pub fn agent_with(url: &str, read: Duration) -> ureq::Agent {
     ureq::AgentBuilder::new()
         .timeout_connect(Duration::from_secs(15))
-        // non-streaming: a long, carefully reasoned answer can take minutes
-        .timeout_read(Duration::from_secs(600))
-        .timeout_write(Duration::from_secs(60))
+        .timeout_read(read)
+        .timeout_write(Duration::from_secs(120))
         .try_proxy_from_env(!bypass_proxy(url))
         .build()
+}
+
+fn agent(url: &str) -> ureq::Agent {
+    // non-streaming: a long, carefully reasoned answer can take minutes
+    agent_with(url, Duration::from_secs(900))
 }
 
 /// Human-readable error from a provider's JSON error body.
@@ -490,7 +522,7 @@ fn error_message(code: u16, body: &str) -> String {
 }
 
 /// POST JSON with up to two retries on 408/429/5xx and connection errors.
-fn post(url: &str, headers: &[(&str, &str)], body: &Value) -> std::result::Result<Value, (u16, String)> {
+fn post(url: &str, headers: &[(&str, &str)], body: &Value, p: &dyn Progress) -> std::result::Result<Value, (u16, String)> {
     let ag = agent(url);
     let mut attempt = 0;
     loop {
@@ -508,37 +540,135 @@ fn post(url: &str, headers: &[(&str, &str)], body: &Value) -> std::result::Resul
                 if !(code == 408 || code == 429 || code >= 500) || attempt >= 2 {
                     return Err((code, error_message(code, &text)));
                 }
-                Duration::from_secs(wait.unwrap_or(2 << attempt).min(30))
+                let d = Duration::from_secs(wait.unwrap_or(2 << attempt).min(30));
+                p.log(&format!("Servis je zauzet ili preopterećen ({code}) — ponovni pokušaj za {} s.", d.as_secs()));
+                d
             }
             Err(ureq::Error::Transport(t)) => {
                 if attempt >= 1 {
                     return Err((0, format!("nije moguće spojiti se na {url}: {t}")));
                 }
+                p.log(&format!("Veza nije uspjela ({t}) — ponovni pokušaj za 2 s."));
                 Duration::from_secs(2)
             }
         };
         attempt += 1;
+        if p.cancelled() {
+            return Err((0, "prekinuto".into()));
+        }
         std::thread::sleep(retry_in);
     }
 }
 
-pub fn ask(cfg: &AiConfig, system: &str, user: &str, image: Option<&(String, String)>, max_tokens: u32) -> Result<Answer> {
+/// OpenAI-compatible chat with server-sent events; servers that ignore
+/// `stream` and answer in one piece are handled too.
+fn openai_stream(url: &str, headers: &[(&str, &str)], body: &Value, p: &dyn Progress) -> Result<Answer> {
+    let ag = agent_with(url, Duration::from_secs(20 * 60));
+    let mut req = ag.post(url).set("content-type", "application/json").set("accept", "text/event-stream");
+    for (k, v) in headers {
+        req = req.set(k, v);
+    }
+    let t0 = Instant::now();
+    let resp = match req.send_json(body.clone()) {
+        Ok(r) => r,
+        Err(ureq::Error::Status(code, r)) => bail!(error_message(code, &r.into_string().unwrap_or_default())),
+        Err(ureq::Error::Transport(t)) => bail!("nije moguće spojiti se na {url}: {t}"),
+    };
+    if !resp.content_type().contains("event-stream") {
+        let a = parse_openai(&resp.into_json::<Value>().map_err(|e| anyhow!("neispravan odgovor AI servisa: {e}"))?)?;
+        p.log(&format!("Odgovor primljen u cjelini nakon {:.0} s.", t0.elapsed().as_secs_f64()));
+        p.delta(&a.text);
+        return Ok(a);
+    }
+    let (mut text, mut model, mut finish, mut n, mut thinking) = (String::new(), String::new(), String::new(), 0u64, false);
+    let mut gen_start: Option<Instant> = None;
+    let mut last_stats = Instant::now();
+    for line in BufReader::new(resp.into_reader()).lines() {
+        if p.cancelled() {
+            bail!("prekinuto");
+        }
+        let line = line.map_err(|e| anyhow!("veza s AI servisom je prekinuta: {e}"))?;
+        let Some(data) = line.strip_prefix("data:").map(str::trim) else { continue };
+        if data == "[DONE]" {
+            break;
+        }
+        let Ok(v) = serde_json::from_str::<Value>(data) else { continue };
+        if !v["error"].is_null() {
+            bail!("AI servis: {}", v["error"]["message"].as_str().or_else(|| v["error"].as_str()).unwrap_or("greška"));
+        }
+        if model.is_empty() {
+            model = v["model"].as_str().unwrap_or_default().to_string();
+        }
+        let ch = &v["choices"][0];
+        let reasoning = ch["delta"]["reasoning_content"].as_str().or_else(|| ch["delta"]["reasoning"].as_str()).unwrap_or_default();
+        if !reasoning.is_empty() && !thinking {
+            thinking = true;
+            p.log(&format!("Model razmišlja prije odgovora (nakon {:.0} s)…", t0.elapsed().as_secs_f64()));
+        }
+        if let Some(c) = ch["delta"]["content"].as_str().filter(|c| !c.is_empty()) {
+            if gen_start.is_none() {
+                gen_start = Some(Instant::now());
+                p.log(&format!("Prvi dio odgovora nakon {:.0} s — model piše…", t0.elapsed().as_secs_f64()));
+            }
+            n += 1;
+            text.push_str(c);
+            p.delta(c);
+        }
+        if let Some(f) = ch["finish_reason"].as_str() {
+            finish = f.to_string();
+        }
+        if last_stats.elapsed() > Duration::from_millis(1000) {
+            let g = gen_start.map(|s| s.elapsed().as_secs_f64()).unwrap_or(0.0);
+            p.stats(json!({"tokens": n, "tps": if g > 0.5 { (n as f64 / g * 10.0).round() / 10.0 } else { 0.0 }, "elapsed": t0.elapsed().as_secs()}));
+            last_stats = Instant::now();
+        }
+    }
+    let g = gen_start.map(|s| s.elapsed().as_secs_f64()).unwrap_or(0.0);
+    p.log(&format!("Gotovo za {:.0} s: {n} dijelova odgovora{}.", t0.elapsed().as_secs_f64(), if g > 0.5 { format!(" ({:.1} po s)", n as f64 / g) } else { String::new() }));
+    p.stats(json!({"tokens": n, "tps": if g > 0.5 { (n as f64 / g * 10.0).round() / 10.0 } else { 0.0 }, "elapsed": t0.elapsed().as_secs(), "done": true}));
+    let answer = crate::ollama::strip_thinking(&text);
+    if answer.is_empty() {
+        bail!("AI nije vratio tekst (razlog završetka: {})", if finish.is_empty() { "nepoznat" } else { &finish });
+    }
+    Ok(Answer { text: answer, model, truncated: finish == "length" })
+}
+
+pub fn ask(cfg: &AiConfig, system: &str, user: &str, image: Option<&(String, String)>, max_tokens: u32, p: &dyn Progress) -> Result<Answer> {
     cfg.check()?;
     let base = cfg.base();
+    let size = format!(
+        "{} znakova{}",
+        system.chars().count() + user.chars().count(),
+        image.map(|(_, d)| format!(" + slika {} kB", d.len() * 3 / 4 / 1024)).unwrap_or_default()
+    );
     match cfg.provider.as_str() {
+        "ollama" => crate::ollama::chat(&base, cfg.model.trim(), cfg.ollama_ctx, system, user, image, max_tokens as u64, p),
         "anthropic" => {
             let url = if base.ends_with("/v1") { format!("{base}/messages") } else { format!("{base}/v1/messages") };
             let key = cfg.api_key.trim();
             let mut fallbacks = uses_fallbacks(cfg.model.trim());
+            p.log(&format!("Šaljem upit ({size}) na {url}, model {}.", cfg.model.trim()));
+            p.log("Claude šalje odgovor u cjelini — čekam (temeljita analiza obično traje 30 s do 2 min)…");
+            let t0 = Instant::now();
             loop {
                 let mut headers = vec![("x-api-key", key), ("anthropic-version", ANTHROPIC_VERSION)];
                 if fallbacks {
                     headers.push(("anthropic-beta", FALLBACK_BETA));
                 }
-                match post(&url, &headers, &anthropic_body(cfg, system, user, image, max_tokens, fallbacks)) {
-                    Ok(v) => return parse_anthropic(&v),
+                match post(&url, &headers, &anthropic_body(cfg, system, user, image, max_tokens, fallbacks), p) {
+                    Ok(v) => {
+                        let a = parse_anthropic(&v)?;
+                        let (i, o) = (v["usage"]["input_tokens"].as_u64().unwrap_or(0), v["usage"]["output_tokens"].as_u64().unwrap_or(0));
+                        p.log(&format!("Odgovor primljen nakon {:.0} s: model {}, upit {i} tokena, odgovor {o} tokena.", t0.elapsed().as_secs_f64(), a.model));
+                        p.stats(json!({"tokens": o, "prompt_tokens": i, "elapsed": t0.elapsed().as_secs(), "done": true}));
+                        p.delta(&a.text);
+                        return Ok(a);
+                    }
                     // a gateway or older deployment may not know the fallback beta: retry without it
-                    Err((400, m)) if fallbacks && m.to_lowercase().contains("fallback") => fallbacks = false,
+                    Err((400, m)) if fallbacks && m.to_lowercase().contains("fallback") => {
+                        p.log("Servis ne podržava zamjenski model (fallback) — ponavljam bez njega.");
+                        fallbacks = false
+                    }
                     Err((_, m)) => bail!(m),
                 }
             }
@@ -547,18 +677,21 @@ pub fn ask(cfg: &AiConfig, system: &str, user: &str, image: Option<&(String, Str
             let url = format!("{base}/chat/completions");
             let auth = format!("Bearer {}", cfg.api_key.trim());
             let headers: Vec<(&str, &str)> = if cfg.api_key.trim().is_empty() { vec![] } else { vec![("authorization", auth.as_str())] };
-            post(&url, &headers, &openai_body(cfg, system, user, image)).map_err(|(_, m)| anyhow!(m)).and_then(|v| parse_openai(&v))
+            p.log(&format!("Šaljem upit ({size}) na {url}, model {}.", cfg.model.trim()));
+            let mut body = openai_body(cfg, system, user, image);
+            body["stream"] = json!(true);
+            openai_stream(&url, &headers, &body, p)
         }
     }
 }
 
-pub fn ask_report(cfg: &AiConfig, system: &str, user: &str, image: Option<&(String, String)>) -> Result<Answer> {
-    ask(cfg, system, user, image, MAX_TOKENS)
+pub fn ask_report(cfg: &AiConfig, system: &str, user: &str, image: Option<&(String, String)>, p: &dyn Progress) -> Result<Answer> {
+    ask(cfg, system, user, image, MAX_TOKENS, p)
 }
 
 /// Small round-trip to verify provider, model and key.
 pub fn test(cfg: &AiConfig) -> Result<Answer> {
-    ask(cfg, "Odgovaraj kratko.", "Ovo je test veze. Odgovori samo riječju: OK", None, 1024)
+    ask(cfg, "Odgovaraj kratko.", "Ovo je test veze. Odgovori samo riječju: OK", None, 1024, &Silent)
 }
 
 pub fn new_report(rec: &Recording, cfg: &AiConfig, start: f32, end: f32, question: &str, a: Answer) -> AiReport {
@@ -670,7 +803,9 @@ mod tests {
         assert!(!p.contains("sk-secret") && p.contains("\"has_key\":true"));
         assert_eq!(c.base(), "https://api.anthropic.com");
         let o = AiConfig { provider: "ollama".into(), ..Default::default() };
-        assert_eq!(o.base(), "http://localhost:11434/v1");
+        assert_eq!(o.base(), "http://127.0.0.1:11434");
+        let old = AiConfig { provider: "ollama".into(), base_url: "http://localhost:11434/v1".into(), ..Default::default() };
+        assert_eq!(old.base(), "http://localhost:11434");
         let custom = AiConfig { provider: "openai".into(), base_url: "http://x:1234/v1/".into(), ..Default::default() };
         assert_eq!(custom.base(), "http://x:1234/v1");
         assert!(AiConfig::default().check().is_err(), "anthropic without key");

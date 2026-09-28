@@ -744,7 +744,7 @@ async function openAnalysis(r) {
   $("#anReport").value = "Učitavanje…"; $("#anTiles").innerHTML = ""; $("#anMeasures").innerHTML = ""; $("#anSummary").innerHTML = ""; $("#anSelInfo").textContent = "";
   fillTasks($("#anTask"), r.task); $("#anNotes").value = r.notes || ""; $("#anSyl").value = r.syllables || "";
   $("#anAiOut").innerHTML = ""; $("#anAiPrompt").classList.add("hidden"); $("#anAiQ").value = "";
-  aiStatus(); loadAiHistory(); loadSummary();
+  aiStatus(); loadAiHistory(); loadSummary(); aiRestore(r);
   an.editor = new Editor.SoundEditor($("#anEditor"), {
     rec: r, analysis: an.settings,
     onAnalyze: (sel, settings) => { an.settings = settings; runAnalysis(sel); },
@@ -756,6 +756,7 @@ async function openAnalysis(r) {
 }
 function closeAnalysis(silent) {
   if (an.editor) { an.editor.destroy(); an.editor = null; }
+  aiRun = null; clearInterval(aiTick); // the task keeps running on the server; reopening follows it again
   $("#anEditor").innerHTML = "";
   if (!silent) { $("#anModal").classList.add("hidden"); $("#anModal").classList.remove("max"); liveSub(); }
 }
@@ -1017,12 +1018,22 @@ async function aiStatus() {
   const p = an.rec && st.patients.find((x) => x.id === an.rec.patient_id);
   if (p && !p.ai_consent) warn.push("Pacijent nema zabilježenu suglasnost za AI analizu (Uredi pacijenta).");
   if (AI && AI.provider !== "ollama" && !cfgErr) warn.push(`Pseudonimizirani podaci šalju se vanjskom servisu (${AI.effective_url}). Za potpuno lokalnu obradu odaberite Ollama.`);
+  let olErr = null;
+  if (AI && AI.provider === "ollama" && !cfgErr) {
+    const o = await api("GET", "/api/ai/ollama").catch(() => null);
+    const m = o && o.models && o.models.find((x) => x.name === AI.model || x.name === AI.model + ":latest");
+    if (!o || !o.running) olErr = o?.error || "Ollama nije dostupna.";
+    else if (!m) olErr = `Model „${AI.model}” nije preuzet — ⚙ AI postavke → Preuzmi.`;
+    else if (!m.vision && $("#anAiImg").checked) warn.push(`Model ${m.name} nema vid (vision): slika sonagrama se neće poslati, samo izmjereni podaci.`);
+    if (olErr) warn.push(olErr);
+  }
   const w = $("#anAiWarn"); w.innerHTML = warn.map(esc).join("<br>"); w.classList.toggle("hidden", !warn.length);
-  $("#anAiRun").disabled = !!cfgErr || (p && !p.ai_consent);
+  $("#anAiRun").disabled = !!cfgErr || !!olErr || (p && !p.ai_consent) || !!(aiRun && aiRun.status === "running");
 }
 function aiBody() {
   const b = { start: an.sel[0], end: an.sel[1], question: $("#anAiQ").value.trim(), settings: an.settings };
-  if ($("#anAiImg").checked && an.editor) { try { b.image = an.editor.snapshot(0.85); } catch (_) {} }
+  // local models: a smaller picture means fewer image tokens and a faster answer
+  if ($("#anAiImg").checked && an.editor) { try { b.image = an.editor.snapshot(0.85, AI && AI.provider === "ollama" ? 1024 : 0); } catch (_) {} }
   return b;
 }
 async function ensureAnalysis() { if (!an.report || !an.sel) await runAnalysis(an.sel); if (!an.sel) throw new Error("analiza nije uspjela"); }
@@ -1036,18 +1047,123 @@ $("#anAiPreview").onclick = async () => {
     pre.classList.remove("hidden");
   } catch (e) { toast(e.message); }
 };
+
+// ---- running AI task: live log, streamed text, stop
+let aiRun = null; // {id, recId, t0, status, text, chars, nlog, stats}
+const fmtSecs = (s) => (s >= 60 ? `${Math.floor(s / 60)} min ${String(Math.floor(s % 60)).padStart(2, "0")} s` : `${Math.floor(s)} s`);
+function aiLogLine(ms, msg) {
+  const box = $("#anAiLog"), stick = box.scrollTop + box.clientHeight >= box.scrollHeight - 4;
+  box.textContent += `[+${(ms / 1000).toFixed(1).padStart(6)} s] ${msg}\n`;
+  if (stick) box.scrollTop = box.scrollHeight;
+}
+function aiShowRunBox(on) { $("#anAiRunBox").classList.toggle("hidden", !on); }
+let aiTick = 0, aiRender = 0;
+function aiState() {
+  const r = aiRun; if (!r) return;
+  const el = (Date.now() - r.t0) / 1000, s = r.stats || {};
+  let t;
+  if (r.status === "running") {
+    t = !r.text ? `⏳ ${fmtSecs(el)} · model učitava i čita upit…` : `✍ ${fmtSecs(el)} · ${s.tokens || 0} tokena${s.tps ? ` · ${String(s.tps).replace(".", ",")} tok/s` : ""}`;
+  } else t = { done: "✓ Gotovo", error: "✗ Greška", cancelled: "■ Zaustavljeno" }[r.status] + ` nakon ${fmtSecs(r.elapsed ?? el)}` + (s.tokens ? ` · ${s.tokens} tokena` : "") + (s.tps ? ` · ${String(s.tps).replace(".", ",")} tok/s` : "");
+  $("#anAiState").textContent = t;
+  $("#anAiStop").classList.toggle("hidden", r.status !== "running");
+}
+function aiRenderText() {
+  if (!aiRun || aiRender) return;
+  aiRender = requestAnimationFrame(() => {
+    aiRender = 0; if (!aiRun) return;
+    const out = $("#anAiOut"), stick = out.getBoundingClientRect().bottom < window.innerHeight + 40;
+    out.innerHTML = `<div class="dim small">${aiRun.status === "running" ? "AI piše…" : "Djelomičan odgovor (nije spremljen)"}</div><div class="md">${md(aiRun.text)}${aiRun.status === "running" ? '<span class="caret">▍</span>' : ""}</div>`;
+    if (stick && aiRun.status === "running") out.lastElementChild.scrollIntoView({ block: "end" });
+  });
+}
+// Events carry positions (log line number, text offset in characters), so a
+// snapshot fetched while the task runs merges with the live events exactly.
+function aiSync(task) {
+  if (!aiRun || task.id !== aiRun.id) return;
+  const log = task.log || [];
+  if (log.length > aiRun.nlog) { log.slice(aiRun.nlog).forEach(([ms, msg]) => aiLogLine(ms, msg)); aiRun.nlog = log.length; }
+  const chars = Array.from(task.text || "");
+  if (chars.length > aiRun.chars) { aiRun.text += chars.slice(aiRun.chars).join(""); aiRun.chars = chars.length; aiRenderText(); }
+  if (task.stats) aiRun.stats = task.stats;
+}
+let aiResyncT = 0;
+function aiResync() {
+  if (aiResyncT || !aiRun) return;
+  const id = aiRun.id;
+  aiResyncT = setTimeout(() => api("GET", "/api/ai/tasks/" + id).then(aiSync).catch(() => {}).finally(() => (aiResyncT = 0)), 50);
+}
+function aiAttach(task) {
+  aiRun = { id: task.id, recId: task.recording_id, t0: Date.now() - (task.age_ms || 0), status: task.status, text: "", chars: 0, nlog: 0, stats: {} };
+  $("#anAiLog").textContent = ""; aiSync(task);
+  aiShowRunBox(true); aiState(); clearInterval(aiTick);
+  if (task.status === "running") {
+    aiTick = setInterval(aiState, 500);
+    $("#anAiRun").disabled = true; $("#anAiRun").textContent = "AI radi…";
+  }
+}
+function aiFinished(m) {
+  const r = aiRun; if (!r || r.finished) return;
+  r.finished = true;
+  r.status = m.status; r.elapsed = (Date.now() - r.t0) / 1000;
+  clearInterval(aiTick); aiState();
+  $("#anAiRun").textContent = "Pokreni AI analizu";
+  if (m.status === "done" && m.report) { showAi(m.report); loadAiHistory(); $("#anAiLog").classList.add("folded"); }
+  else if (m.status === "error") $("#anAiOut").innerHTML = `<div class="err">${esc(m.error || "Greška")}</div>` + (r.text ? `<div class="dim small">Djelomičan odgovor:</div><div class="md">${md(r.text)}</div>` : "");
+  else if (m.status === "cancelled") aiRenderText();
+  aiStatus();
+}
 $("#anAiRun").onclick = async () => {
   const btn = $("#anAiRun"); if (btn.disabled) return;
-  btn.disabled = true; const t0 = Date.now();
-  const tick = setInterval(() => (btn.textContent = `AI analizira… ${Math.round((Date.now() - t0) / 1000)} s`), 500);
-  $("#anAiOut").innerHTML = '<div class="dim">AI analizira snimku — temeljita analiza može potrajati i minutu-dvije…</div>';
+  btn.disabled = true; btn.textContent = "Pripremam…";
+  $("#anAiOut").innerHTML = ""; $("#anAiLog").classList.remove("folded");
   try {
     await ensureAnalysis();
-    showAi(await api("POST", `/api/recordings/${an.rec.id}/ai`, aiBody()));
-    loadAiHistory();
-  } catch (e) { $("#anAiOut").innerHTML = `<div class="err">${esc(e.message)}</div>`; }
-  finally { clearInterval(tick); btn.textContent = "Pokreni AI analizu"; btn.disabled = false; aiStatus(); }
+    const { task } = await api("POST", `/api/recordings/${an.rec.id}/ai`, aiBody());
+    aiAttach({ id: task, recording_id: an.rec.id, started: Date.now(), status: "running", log: [] });
+    // the server may already have logged its first lines before we attached
+    const full = await api("GET", "/api/ai/tasks/" + task).catch(() => null);
+    if (full && aiRun && aiRun.id === task) {
+      aiSync(full);
+      if (full.status !== "running" && aiRun.status === "running") aiFinished({ status: full.status, report: full.report, error: full.error });
+    }
+  } catch (e) { $("#anAiOut").innerHTML = `<div class="err">${esc(e.message)}</div>`; btn.textContent = "Pokreni AI analizu"; aiStatus(); }
 };
+$("#anAiStop").onclick = () => { if (aiRun) api("POST", `/api/ai/tasks/${aiRun.id}/cancel`).catch((e) => toast(e.message)); };
+$("#anAiLogToggle").onclick = () => $("#anAiLog").classList.toggle("folded");
+async function aiRestore(rec) {
+  // reopening a recording: follow a running AI task, or show why the last one failed
+  aiRun = null; clearInterval(aiTick); aiShowRunBox(false); $("#anAiLog").textContent = "";
+  const list = await api("GET", "/api/ai/tasks?recording=" + encodeURIComponent(rec.id)).catch(() => []);
+  const t = list.filter((x) => x.kind === "report").pop();
+  if (!t || an.rec !== rec) return;
+  if (t.status === "running" || t.status === "error" || t.status === "cancelled") {
+    aiAttach(t);
+    if (t.status !== "running") { aiRun.elapsed = t.log.length ? t.log[t.log.length - 1][0] / 1000 : 0; aiState(); if (t.status === "error") $("#anAiOut").innerHTML = `<div class="err">Zadnji pokušaj: ${esc(t.error || "greška")}</div>`; }
+  }
+}
+function aiHeader(m) {
+  if (m.ev === "start" || m.ev === "end") api("GET", "/api/ai/tasks").then((l) => {
+    const n = l.filter((t) => t.status === "running" && t.kind === "report").length;
+    $("#btnAi").textContent = n ? "AI ⏳" : "AI"; $("#btnAi").classList.toggle("busy", !!n);
+  }).catch(() => {});
+}
+HOOKS.push((m) => {
+  if (m.t !== "ai_task") return;
+  aiHeader(m); olTaskEvent(m);
+  if (!aiRun || m.id !== aiRun.id) return;
+  if (m.ev === "log") {
+    if (m.n === aiRun.nlog) { aiLogLine(m.ms, m.msg); aiRun.nlog++; }
+    else if (m.n > aiRun.nlog) aiResync(); // missed earlier lines: fetch them in order
+  } else if (m.ev === "delta") {
+    const ch = Array.from(m.text), skip = aiRun.chars - m.at; // overlap with a snapshot already shown
+    if (skip < 0) aiResync();
+    else if (skip < ch.length) { aiRun.text += ch.slice(skip).join(""); aiRun.chars = m.at + ch.length; aiRenderText(); aiState(); }
+  }
+  else if (m.ev === "stats") { aiRun.stats = m.stats; aiState(); }
+  else if (m.ev === "end") aiFinished(m);
+});
+
 function md(t) {
   const inline = (x) => x.replace(/\*\*(.+?)\*\*/g, "<b>$1</b>").replace(/`([^`]+)`/g, "<code>$1</code>");
   let html = "", list = null;
@@ -1083,23 +1199,29 @@ async function loadAiHistory() {
 }
 
 // ---- AI settings panel (header "AI" button)
-const AI_DEFAULT_MODEL = { anthropic: "claude-opus-5", openai: "", ollama: "llama3.2-vision" };
-const AI_URL_HINT = { anthropic: "https://api.anthropic.com", openai: "https://api.openai.com/v1", ollama: "http://localhost:11434/v1" };
+const AI_DEFAULT_MODEL = { anthropic: "claude-opus-5", openai: "", ollama: "gemma3:4b" };
+const AI_URL_HINT = { anthropic: "https://api.anthropic.com", openai: "https://api.openai.com/v1", ollama: "http://127.0.0.1:11434" };
 async function openAiPanel() {
   $("#aiPanel").classList.remove("hidden");
   await loadAiCfg(); if (!AI) return;
   $("#aiProvider").value = AI.provider; $("#aiModel").value = AI.model; $("#aiUrl").value = AI.base_url;
-  $("#aiImage").checked = AI.send_image; aiPanelHints();
+  $("#aiImage").checked = AI.send_image; $("#olCtx").value = String(AI.ollama_ctx || 0); aiPanelHints();
 }
 function aiPanelHints() {
   const pr = $("#aiProvider").value, same = AI && pr === AI.provider;
   $("#aiUrl").placeholder = AI_URL_HINT[pr];
   $("#aiKey").value = "";
-  $("#aiKey").placeholder = pr === "ollama" ? "(nije potreban)" : same && AI.has_key ? "•••• spremljen (upišite za promjenu)" : pr === "openai" ? "sk-… (prazno za lokalne servere)" : "sk-ant-…";
+  $("#aiKey").placeholder = same && AI.has_key ? "•••• spremljen (upišite za promjenu)" : pr === "openai" ? "sk-… (prazno za lokalne servere)" : "sk-ant-…";
+  $("#aiKeyL").classList.toggle("hidden", pr === "ollama"); $("#aiClearKey").classList.toggle("hidden", pr === "ollama");
+  $("#aiOllama").classList.toggle("hidden", pr !== "ollama");
   $("#aiInfo").innerHTML = pr === "anthropic"
     ? 'Zadani model: <b>claude-opus-5</b>. Ključ: console.anthropic.com → API Keys. Ključ se sprema samo na ovom računalu (ai.json) i nikad se ne prikazuje u pregledniku.'
-    : pr === "ollama" ? 'Ollama radi lokalno i besplatno (ollama.com). Za sliku sonagrama treba model s vidom, npr. <b>llama3.2-vision</b> ili <b>qwen2.5vl</b>; inače isključite sliku.'
+    : pr === "ollama" ? "Odaberite instalirani model ili preuzmite preporučeni. Za sliku sonagrama treba model s vidom (👁)."
     : "Bilo koji servis s OpenAI /chat/completions sučeljem (OpenAI, Azure proxy, LM Studio, vLLM, OpenRouter…). Upišite model i adresu.";
+  if (pr === "ollama") olLoad();
+  else api("GET", "/api/ai/ollama?url=" + encodeURIComponent(AI_URL_HINT.ollama)).then((o) => {
+    if (o && o.running && $("#aiProvider").value === pr) $("#aiInfo").innerHTML += ` <span class="okc">· Na ovom računalu radi Ollama ${esc(o.version)} (${o.models.length} ${o.models.length === 1 ? "model" : "modela"}) — odaberite „Ollama” za besplatnu lokalnu analizu.</span>`;
+  }).catch(() => {});
 }
 $("#btnAi").onclick = () => ($("#aiPanel").classList.contains("hidden") ? openAiPanel() : $("#aiPanel").classList.add("hidden"));
 $("#anAiCfg").onclick = () => { closeAnalysis(); openAiPanel(); window.scrollTo(0, 0); };
@@ -1114,17 +1236,98 @@ async function saveAi(extra = {}) {
   if (AI && pr !== AI.provider && AI.has_key && !$("#aiKey").value && pr !== "ollama" &&
       !confirm("Promjena servisa briše spremljeni API ključ prethodnog servisa. Nastaviti?")) return false;
   AI = await api("PUT", "/api/ai/config", { provider: pr, model: $("#aiModel").value, base_url: $("#aiUrl").value,
-    api_key: $("#aiKey").value || null, send_image: $("#aiImage").checked, ...extra });
+    api_key: $("#aiKey").value || null, send_image: $("#aiImage").checked, ollama_ctx: +$("#olCtx").value, ...extra });
   aiPanelHints(); return true;
 }
 $("#aiSave").onclick = async () => { try { if (await saveAi()) toastInfo("AI postavke spremljene"); } catch (e) { toast(e.message); } };
 $("#aiClearKey").onclick = async () => { if (!confirm("Obrisati spremljeni API ključ?")) return; try { await saveAi({ clear_key: true, api_key: null }); toastInfo("Ključ obrisan"); } catch (e) { toast(e.message); } };
 $("#aiTest").onclick = async () => {
-  const b = $("#aiTest"); b.disabled = true; b.textContent = "Testiram…";
+  const b = $("#aiTest"); b.disabled = true; b.textContent = $("#aiProvider").value === "ollama" ? "Testiram… (učitavanje modela može potrajati)" : "Testiram…";
   try { if (!(await saveAi())) return; const r = await api("POST", "/api/ai/test"); $("#aiInfo").innerHTML = `✓ Veza radi — model <b>${esc(r.model)}</b> je odgovorio: „${esc(r.text)}“`; }
   catch (e) { $("#aiInfo").innerHTML = `<span class="err">✗ ${esc(e.message)}</span>`; }
   finally { b.disabled = false; b.textContent = "Test veze"; }
 };
+$("#olCtx").onchange = () => saveAi().catch((e) => toast(e.message));
+
+// ---- Ollama: installed models, recommendations, download, delete
+const OL_REC = [
+  ["gemma3:4b", 3.3, true, "preporuka za GPU sa 6 GB (npr. GTX 1060 6 GB) — dobar hrvatski, čita sliku"],
+  ["qwen2.5vl:3b", 3.2, true, "mali model s vidom, GPU 4–6 GB"],
+  ["llama3.2:3b", 2.0, false, "najbrži, bez slike; GPU 3–4 GB ili samo CPU"],
+  ["qwen2.5:7b", 4.7, false, "jači tekst, bez slike; GPU 6–8 GB"],
+  ["qwen2.5vl:7b", 6.0, true, "jači model s vidom; GPU 8 GB+"],
+  ["gemma3:12b", 8.1, true, "kvalitetniji; GPU 12 GB+"],
+  ["llama3.2-vision", 7.8, true, "11B s vidom; GPU 12 GB+, na slabijem hardveru vrlo spor"],
+];
+let OL = null, olPullTask = null;
+const olUrl = () => $("#aiUrl").value.trim();
+async function olLoad() {
+  $("#olStatus").textContent = "Provjeravam Ollamu…"; $("#olStatus").className = "ol-status";
+  OL = await api("GET", "/api/ai/ollama" + (olUrl() ? "?url=" + encodeURIComponent(olUrl()) : "")).catch((e) => ({ running: false, error: e.message }));
+  const s = $("#olStatus");
+  if (!OL.running) {
+    s.innerHTML = `✗ ${esc(OL.error || "Ollama nije dostupna")} <a href="https://ollama.com/download" target="_blank" rel="noopener">ollama.com/download</a>`; s.className = "ol-status bad";
+  } else { s.textContent = `● Ollama ${OL.version} radi na ${OL.url} · ${OL.models.length} ${OL.models.length === 1 ? "model" : "modela"}`; s.className = "ol-status ok"; }
+  olRender();
+}
+function olHas(name) { return OL && OL.models && OL.models.some((m) => m.name === name || m.name === name + ":latest"); }
+function olRender() {
+  const cur = $("#aiModel").value.trim(), box = $("#olModels");
+  $("#aiModelList").innerHTML = (OL?.models || []).map((m) => `<option value="${esc(m.name)}">`).join("");
+  box.innerHTML = "";
+  if (!OL || !OL.running) box.innerHTML = '<div class="dim small">—</div>';
+  else if (!OL.models.length) box.innerHTML = '<div class="dim small">Nema preuzetih modela — preuzmite jedan desno.</div>';
+  (OL?.models || []).forEach((m) => {
+    const sel = m.name === cur || m.name === cur + ":latest";
+    const d = el("div", "ol-item" + (sel ? " sel" : ""));
+    d.innerHTML = `<div class="grow"><b>${esc(m.name)}</b> ${m.vision ? '<span class="tag vis" title="Čita slike (vision)">👁 slika</span>' : ""}` +
+      `<div class="small dim">${[m.params, m.quant, (m.size / 1e9).toFixed(1) + " GB", m.context ? "kontekst " + m.context : null].filter(Boolean).map(esc).join(" · ")}</div></div>`;
+    const use = el("button", "small" + (sel ? " pri" : ""), sel ? "✓ u upotrebi" : "Koristi");
+    use.onclick = async () => { $("#aiModel").value = m.name; try { await saveAi(); toastInfo("Model: " + m.name); olRender(); } catch (e) { toast(e.message); } };
+    const del = el("button", "small", "✕"); del.title = "Obriši model s diska";
+    del.onclick = async () => { if (!confirm(`Obrisati model ${m.name} iz Ollame (${(m.size / 1e9).toFixed(1)} GB)?`)) return; try { await api("POST", "/api/ai/ollama/delete", { model: m.name }); olLoad(); } catch (e) { toast(e.message); } };
+    d.append(use, del); box.append(d);
+  });
+  const ld = OL?.loaded || [];
+  $("#olLoaded").innerHTML = ld.length ? "U memoriji: " + ld.map((x) => `${esc(x.name)} — ${(x.size / 1e9).toFixed(1)} GB, ${x.gpu_pct >= 99.5 ? "100 % GPU" : x.gpu_pct <= 0.5 ? "samo CPU" : `${x.gpu_pct} % GPU / ${100 - x.gpu_pct} % CPU`}`).join("; ") : "";
+  const rec = $("#olRec"); rec.innerHTML = "";
+  OL_REC.forEach(([name, gbs, vis, note]) => {
+    const d = el("div", "ol-item");
+    d.innerHTML = `<div class="grow"><b>${esc(name)}</b> ${vis ? '<span class="tag vis">👁 slika</span>' : ""} <span class="small dim">≈ ${String(gbs).replace(".", ",")} GB</span><div class="small dim">${esc(note)}</div></div>`;
+    const has = olHas(name);
+    const b = el("button", "small" + (has ? "" : " pri"), has ? "✓ preuzet" : "⬇ Preuzmi");
+    b.disabled = has || !OL?.running || !!olPullTask;
+    b.onclick = () => olPull(name);
+    d.append(b); rec.append(d);
+  });
+}
+async function olPull(name) {
+  name = (name || "").trim(); if (!name) return;
+  try {
+    const { task } = await api("POST", "/api/ai/ollama/pull", { model: name });
+    olPullTask = task;
+    $("#olPull").classList.remove("hidden"); $("#olPullTitle").textContent = "Preuzimam " + name; $("#olPullPct").textContent = "";
+    $("#olPullBar").style.width = "0%"; $("#olPullLog").textContent = ""; olRender();
+  } catch (e) { toast(e.message); }
+}
+$("#olPullBtn").onclick = () => olPull($("#olPullName").value);
+$("#olPullStop").onclick = () => { if (olPullTask) api("POST", `/api/ai/tasks/${olPullTask}/cancel`).catch(() => {}); else $("#olPull").classList.add("hidden"); };
+$("#olRefresh").onclick = olLoad;
+$("#aiUrl").onchange = () => { if ($("#aiProvider").value === "ollama") olLoad(); };
+function olTaskEvent(m) {
+  if (!olPullTask || m.id !== olPullTask) return;
+  if (m.ev === "log") { const l = $("#olPullLog"); l.textContent += m.msg + "\n"; l.scrollTop = l.scrollHeight; }
+  else if (m.ev === "stats" && m.stats) {
+    const s = m.stats; $("#olPullBar").style.width = (s.pct || 0) + "%";
+    $("#olPullPct").textContent = s.total ? `${(s.completed / 1e9).toFixed(2)} / ${(s.total / 1e9).toFixed(2)} GB · ${s.pct} %` : "";
+  } else if (m.ev === "end") {
+    $("#olPullTitle").textContent = { done: "✓ Preuzeto", error: "✗ Greška: " + (m.error || ""), cancelled: "Preuzimanje prekinuto" }[m.status] || m.status;
+    olPullTask = null; olLoad();
+    if (m.status === "done") setTimeout(() => $("#olPull").classList.add("hidden"), 4000);
+  }
+}
+// a download started in another browser window: follow it here too
+api("GET", "/api/ai/tasks").then((l) => { const t = l.find((x) => x.kind === "pull" && x.status === "running"); if (t) { olPullTask = t.id; $("#olPull").classList.remove("hidden"); $("#olPullTitle").textContent = "Preuzimam " + t.label; } aiHeader({ ev: "start" }); }).catch(() => {});
 
 // ============================================================ keyboard
 document.addEventListener("keydown", (e) => {

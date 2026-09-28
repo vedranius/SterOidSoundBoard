@@ -3,7 +3,7 @@
 Real-time audio effects host for Linux, Windows and Raspberry Pi, controlled from any browser
 (desktop, tablet, phone). Inspired by MOD Desktop and Patchbox OS, rebuilt from scratch.
 
-**Status:** 0.4.0 — Music + DigiLingua modes on one engine; Praat-validated voice analysis with a Praat-style editor, live sonagram, progress tracking and AI opinion for clinicians. See [CHANGELOG](CHANGELOG.md) and the roadmap below.
+**Status:** 0.4.1 — Music + DigiLingua modes on one engine; Praat-validated voice analysis with a Praat-style editor, live sonagram, progress tracking and AI opinion for clinicians. See [CHANGELOG](CHANGELOG.md) and the roadmap below.
 
 ## Two modes, one engine
 
@@ -32,10 +32,13 @@ intensity (dB SPL with microphone calibration), phonation and fluency timing. Di
 tier (blocks, prolongations, repetitions… → %SS, SSI-style duration) with Praat TextGrid export,
 **progress charts** per patient, printable/PDF report and an **AI opinion** for the rehabilitator.
 
-**AI (optional, your own key):** Anthropic Claude (default `claude-opus-5`), any OpenAI-compatible
-API, or local Ollama. The AI gets measurements, a pseudonymised profile (no name, code or birth
-date), the task, your observations and optionally the sonagram image — never the audio. It needs the
-patient's recorded consent. Configure it with the **AI** button in the header.
+**AI (optional):** Anthropic Claude (default `claude-opus-5`, your own key), any OpenAI-compatible
+API, or **Ollama** — free, local, nothing leaves the computer; install models from the AI settings.
+The AI gets measurements, a pseudonymised profile (no name, code or birth date), the task, your
+observations and optionally the sonagram image — never the audio. It needs the patient's recorded
+consent. A live log shows what it is doing (model loading, GPU/CPU use, tokens/s) and the answer
+appears as it is written. Configure it with the **AI** button in the header.
+
 Open it directly with `http://<host>:8420/#digilingua`.
 
 > Patient data stays on the machine (`clinic.json`, `recordings/` in the data directory).
