@@ -24,16 +24,21 @@ DigiLingua UI text is Croatian; Music UI is English.
 - `crates/engine` (steroid-engine): `audio.rs` cpal I/O + taps (spectrum ring, recorder ring, mute),
   `graph.rs` Board/Schedule (DAG, topo sort, lock-free swap via rtrb, garbage returned to control
   thread, `sanitize()` for foreign boards, node roles), `nodes.rs` built-in DSP + ParamSpec
-  (11 nodes incl. Eq31, Daf, PitchShift, Noise, Interrupter, Channels), `fft.rs` FFT + live spectrum,
-  `analysis.rs` voice analysis (F0/jitter/shimmer/HNR + Croatian report), `record.rs` WAV writer
-  thread + loader, `templates.rs` built-in boards (DigiLingua chain).
+  (11 nodes incl. Eq31, Daf, PitchShift, Noise, Interrupter, Channels), `fft.rs` FFT,
+  `praat/` Praat ports (pitch, pulses, voice report, intensity, Burg formants, CPPS, resampling,
+  sinc) — validated against Praat 7 (VALIDATION.md, `tools/validate.sh`; keep it that way: any
+  change there must re-run the comparison), `analysis.rs` VoiceReport/Tracks on top of `praat/` +
+  Croatian report, `live.rs` live sonagram analyzer (control thread), `record.rs` WAV writer
+  thread + loader, `templates.rs` built-in boards (DigiLingua chain) + clinical presets.
 - `crates/app` (steroidsoundboard): `main.rs` args/startup, `state.rs` App state (presets, recording,
   clinic ops, AI jobs; lock order `inner` → `clinic`), `clinic.rs` patients/sessions/recordings/
   AI-report store, `ai.rs` AI providers (Anthropic Messages API raw HTTP via ureq+rustls/ring,
   default `claude-opus-5` + `fallbacks: "default"`; OpenAI-compatible; Ollama) and the Croatian
   clinical prompt (pseudonymised: never name/code/birth date), `server.rs` axum REST + WS.
 - `web/` vanilla JS UI, embedded with rust-embed: `app.js` core + pedalboard (HOOKS, setParam,
-  setBypass shared by views), `clinic.js` DigiLingua view.
+  setBypass shared by views), `sono.js` colour maps/axes/legend + LiveSono widget, `editor.js`
+  Praat-style SoundEditor, `clinic.js` DigiLingua workstation (patients, sessions, presets, devices,
+  EQ, analysis modal, progress, settings, print report).
 - `packaging/linux/` systemd unit + RPi install script. `.github/workflows/build.yml` CI + releases on `v*` tags.
 
 ## Conventions
@@ -48,10 +53,14 @@ v0.1.0 engine foundation, pedalboard, CI.
 v0.2.0 DigiLingua mode + 6 new nodes, recording, voice analysis, presets/templates, mute, live spectrum.
 v0.3.0 full patient profile + AI consent, recording task/notes, fluency measures, AI opinion
 (Claude / OpenAI-compatible / Ollama). CI green on all 3 targets since 0.2.0.
-No auth yet (patient data + AI key on LAN!) — PIN/login is top priority in 0.4.
+v0.4.0 Praat-compatible engine (validated), Praat-style editor + annotations/TextGrid, live sonagram
+with legend, DigiLingua workstation (patient list, clinical presets, devices/status, EQ sliders,
+chain, per-ear mute, sessions detail/apply, progress charts/CSV, clinic settings + SPL calibration,
+print/PDF report).
+No auth yet (patient data + AI key on LAN!) — PIN/login is top priority in 0.5.
 Tags can't be pushed from Claude's cloud sessions (git proxy): Vedran pushes `vX.Y.Z` himself.
 
-## Next: v0.4.0
+## Next: v0.5.0
 0. PIN/login (patient data on LAN), optional per-clinic data dir.
 1. Verify CI green on all 3 targets; fix whatever breaks (Windows first).
 2. Windows ASIO (cpal `asio` feature; ASIO SDK in CI, check its license) + WASAPI exclusive option.
@@ -59,6 +68,6 @@ Tags can't be pushed from Claude's cloud sessions (git proxy): Vedran pushes `vX
 4. Pisound support on RPi (button + MIDI), RT tuning check.
 5. State-preserving graph edits (reuse processors across Schedule rebuilds so delay tails don't reset).
 6. Multi-channel routing (beyond first 2 channels).
-Roadmap after: 0.5 LV2 hosting + plugin manager, 0.6 control-surface designer + MIDI learn/OSC,
-0.7 AI Lab (Faust), 0.8 RPi image, snapshots, DigiLingua exercise protocols + progress charts
-(analysis history per patient), PDF report export.
+7. DigiLingua: audit log of who changed patient data (with login), backup/restore of the data dir.
+Roadmap after: 0.6 LV2 hosting + plugin manager, 0.7 control-surface designer + MIDI learn/OSC,
+0.8 AI Lab (Faust), 0.9 RPi image, snapshots, DigiLingua exercise protocols.

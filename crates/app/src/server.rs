@@ -630,11 +630,14 @@ struct AiReq {
     /// Sonagram as a JPEG/PNG data URL.
     #[serde(default)]
     image: Option<String>,
+    /// Analysis settings used in the editor (default: clinic settings).
+    #[serde(default)]
+    settings: Option<steroid_engine::analysis::AnalysisSettings>,
 }
 
 async fn ai_preview(State(app): S, Path(id): Path<String>, Json(b): Json<AiReq>) -> Response {
     let q: String = b.question.chars().take(4000).collect();
-    let r = tokio::task::spawn_blocking(move || app.ai_job(&id, b.start, b.end, &q, b.image.as_deref())).await;
+    let r = tokio::task::spawn_blocking(move || app.ai_job(&id, b.start, b.end, b.settings, &q, b.image.as_deref())).await;
     match r {
         Ok(Ok(j)) => Json(json!({
             "provider": j.cfg.provider_name(),
@@ -653,7 +656,7 @@ async fn ai_preview(State(app): S, Path(id): Path<String>, Json(b): Json<AiReq>)
 async fn ai_run(State(app): S, Path(id): Path<String>, Json(b): Json<AiReq>) -> Response {
     let q: String = b.question.chars().take(4000).collect();
     let r = tokio::task::spawn_blocking(move || {
-        let job = app.ai_job(&id, b.start, b.end, &q, b.image.as_deref())?;
+        let job = app.ai_job(&id, b.start, b.end, b.settings, &q, b.image.as_deref())?;
         app.ai_run(job, &q)
     })
     .await;

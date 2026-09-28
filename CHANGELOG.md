@@ -2,6 +2,65 @@
 
 All notable changes are documented here. Versioning: [SemVer](https://semver.org).
 
+## [0.4.0] - 2026-09-28
+
+DigiLingua becomes a clinical workstation: **Praat-compatible voice analysis** (validated against
+Praat 7), a **Praat-style sound editor**, an enlargeable **live sonagram** with legend and readouts,
+and the DigiLingua web app's workflow (patient list, clinical presets, device/status panel,
+sessions, progress). See [VALIDATION.md](VALIDATION.md).
+
+### Added
+- **Praat-compatible analysis engine** (`crates/engine/src/praat/`), a port of Praat's algorithms:
+  pitch (AC + Viterbi path finder), glottal pulses (cc), voice report (voicing, 5 jitter and
+  6 shimmer variants, HNR, NHR, mean autocorrelation), intensity, Burg formants and CPPS with the
+  AVQI settings. Pitch, pulses, jitter, shimmer, HNR and intensity equal Praat 7.0 to all printed
+  digits on 7 test signals incl. Croatian speech; formants within 0–2 %, CPPS within 0.5 %.
+  Reproducible with `tools/validate.sh` (+ `tools/make_test_signals.py`, `tools/speech_hr.praat`).
+- **Sound editor** in the analysis window (like Praat's): waveform with glottal pulses, spectrogram
+  (Gaussian window, 5–50 ms, pre-emphasis, dynamic range, 4 colour maps, dB colour bar) with pitch,
+  intensity and formant tracks and their scales, shared zoomable time axis (wheel, buttons, keys),
+  selection, cursor, play selection/visible part, spectral slice at the cursor or LTAS of the
+  selection with formant markers, live readouts (time, Hz, dB, F0, intensity, F1–F4).
+  Pitch range / formant settings per recording with male/female/child presets.
+- **Disfluency annotations** on a tier under the spectrogram (block, prolongation, sound/syllable/
+  word repetition, interjection, revision, hard onset, voice break, whisper, secondary behaviour,
+  other): summary with SLD count, %SS (manual or automatic syllable count), rate per minute,
+  mean of the 3 longest SLD; **Praat TextGrid export**.
+- **Full measures table** (Praat voice report groups, formants, intensity, timing) with orientation
+  thresholds, tiles, and a **printable / PDF report** (clinic header, patient, recording, editor
+  image, measures, disfluencies, clinical report, AI opinion, signature line).
+- **Live sonagram**: server-side analyzer (10 ms frames, Praat Gaussian window 5/15/30 ms, 0.5 dB
+  resolution up to 12 kHz, live F0 and intensity) streamed only to clients that show it; the view
+  has range 0–4/5/8/12 kHz, dynamic range, auto/manual level, colour maps, 4–30 s history, F0 and
+  intensity overlays, dB colour legend, axes, hover readout, freeze, PNG snapshot and full screen.
+- **DigiLingua workstation** (after the DigiLingua web app): searchable patient list (initials,
+  code, age, last session, active-session marker), input/output device selectors and an audio
+  status panel (LED, sample rate, buffer, estimated latency, DSP load, xruns, Start/Stop),
+  31-band EQ as **vertical sliders with frequency-group shading** or as a curve, quick curves,
+  **clinical presets** (DigiLingua factory curves + DAF/FAF/Lombard/interruption starting points +
+  your own, save/load/delete, current preset and "modified" badge), clickable **signal chain**,
+  mic + L/R ear meters with **peak hold** and **per-ear mute**, keyboard shortcuts
+  (Space audio, R reset EQ, D refresh devices, M mute, 1–3 tabs, / search, Esc).
+- **Sessions**: the preset in use is stored; session detail shows all settings at the start of the
+  session, notes and its recordings; **"apply settings of this session"**.
+- **Progress** tab: charts per measure over time (F0, jitter, shimmer, HNR, CPPS, MPT, F0 range,
+  intensity, speech/articulation rate, %SS, SLD) with normal ranges, change since the first
+  recording, filter by task, table of all recordings and **CSV export** (Excel-friendly).
+- **Clinic settings**: clinic and clinician for reports, default analysis settings, and
+  **microphone calibration** to dB SPL (computed from a calibrator recording of known level).
+- AI prompt includes all new measures, CPPS, formants, calibrated intensity and the disfluency
+  summary; the AI uses the analysis settings chosen in the editor and gets the editor image.
+
+### Changed
+- Voice analysis rewritten on the Praat engine (report text in Praat sections; earlier recordings
+  are re-analysed with the new engine). Analysis of the whole recording is cached.
+- Heavy analysis runs outside the audio path and uses all cores for CPPS; Praat's sinc
+  interpolation scheme makes pitch 3× faster. The editor shows quick measures first, CPPS follows.
+
+### Notes
+- Still no login — patient data and the AI key are reachable on the network; run with `--local`
+  in clinics until PIN/login arrives (next release).
+
 ## [0.3.0] - 2026-09-28
 
 DigiLingua: full patient profile and an **AI opinion** on voice recordings for the rehabilitator.

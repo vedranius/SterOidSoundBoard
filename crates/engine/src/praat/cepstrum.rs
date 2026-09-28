@@ -88,15 +88,26 @@ pub fn cepstrogram(s: &Sound, p: &CppsParams) -> (Vec<Vec<f64>>, f64, f64, f64) 
     (rows, t1, 1.0 / r.sr, r.duration())
 }
 
-fn median(v: &mut [f64]) -> f64 {
+/// f64 → i64 key with the same order as `f64::total_cmp` (the transform is its own inverse).
+#[inline]
+fn key(v: f64) -> i64 {
+    let b = v.to_bits() as i64;
+    b ^ ((((b >> 63) as u64) >> 1) as i64)
+}
+#[inline]
+fn unkey(k: i64) -> f64 {
+    f64::from_bits((k ^ ((((k >> 63) as u64) >> 1) as i64)) as u64)
+}
+
+/// Median of order keys (selection on plain integers is much faster than on floats).
+fn median_keys(v: &mut [i64]) -> f64 {
     let n = v.len();
-    let (_, m, _) = v.select_nth_unstable_by(n / 2, f64::total_cmp);
-    let hi = *m;
+    let (lower, m, _) = v.select_nth_unstable(n / 2);
+    let hi = unkey(*m);
     if n % 2 == 1 {
         hi
     } else {
-        let lo = v[..n / 2].iter().copied().fold(f64::MIN, f64::max);
-        0.5 * (lo + hi)
+        0.5 * (unkey(*lower.iter().max().expect("n ≥ 2")) + hi)
     }
 }
 
@@ -111,16 +122,16 @@ fn siegel(x: &[f64], y: &[f64]) -> (f64, f64) {
         inner.clear();
         for j in 0..n {
             if j != i && x[j] != x[i] {
-                inner.push((y[j] - y[i]) / (x[j] - x[i]));
+                inner.push(key((y[j] - y[i]) / (x[j] - x[i])));
             }
         }
         if !inner.is_empty() {
-            outer.push(median(&mut inner));
+            outer.push(key(median_keys(&mut inner)));
         }
     }
-    let slope = median(&mut outer);
-    let mut ic: Vec<f64> = (0..n).map(|i| y[i] - slope * x[i]).collect();
-    (slope, median(&mut ic))
+    let slope = median_keys(&mut outer);
+    let mut ic: Vec<i64> = (0..n).map(|i| key(y[i] - slope * x[i])).collect();
+    (slope, median_keys(&mut ic))
 }
 
 /// Praat's peak search "from both sides" with parabolic refinement.
@@ -212,21 +223,30 @@ pub fn cpp_frames(s: &Sound, p: &CppsParams) -> Vec<(f64, f64, f64, f64, f64)> {
     // peak search window (0-based sample indices)
     let pa = ((1.0 / p.peak_ceiling) / dq).ceil() as usize;
     let pb = (((1.0 / p.peak_floor) / dq).floor() as usize).min(nq - 1);
-    sm.iter()
-        .map(|row| {
-            let db: Vec<f64> = row.iter().map(|v| 10.0 * (v + 1e-30).log10()).collect();
-            let (slope, intercept) = siegel(&xs, &db[fit_a..=fit_b]);
-            let (mut peak_db, xi) = peak(&db, pa, pb, false);
-            let (_, xr) = peak(&db, pa, pb, true);
-            let mut qpk = xi * dq;
-            let (i1, i2) = (xi.round() as isize, xr.round() as isize);
-            if i1 != i2 && (i2 - i1) <= 5 {
-                qpk = 0.5 * (i1 + i2) as f64 * dq;
-                peak_db = db[i1 as usize]; // flat peak
-            }
-            (slope, intercept, peak_db, qpk, peak_db - (slope * qpk + intercept))
-        })
-        .collect()
+    let per_frame = |row: &Vec<f64>| {
+        let db: Vec<f64> = row.iter().map(|v| 10.0 * (v + 1e-30).log10()).collect();
+        let (slope, intercept) = siegel(&xs, &db[fit_a..=fit_b]);
+        let (mut peak_db, xi) = peak(&db, pa, pb, false);
+        let (_, xr) = peak(&db, pa, pb, true);
+        let mut qpk = xi * dq;
+        let (i1, i2) = (xi.round() as isize, xr.round() as isize);
+        if i1 != i2 && (i2 - i1) <= 5 {
+            qpk = 0.5 * (i1 + i2) as f64 * dq;
+            peak_db = db[i1 as usize]; // flat peak
+        }
+        (slope, intercept, peak_db, qpk, peak_db - (slope * qpk + intercept))
+    };
+    // The robust trend line is O(n²) per frame: spread frames over the cores
+    // (control thread only; the order of the result is preserved).
+    let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1).min(8);
+    if threads < 2 || sm.len() < 64 {
+        return sm.iter().map(per_frame).collect();
+    }
+    let pf = &per_frame;
+    std::thread::scope(|s| {
+        let parts: Vec<_> = sm.chunks(sm.len().div_ceil(threads)).map(|c| s.spawn(move || c.iter().map(pf).collect::<Vec<_>>())).collect();
+        parts.into_iter().flat_map(|h| h.join().expect("CPPS worker")).collect()
+    })
 }
 
 /// CPPS in dB (mean CPP over frames of the smoothed cepstrogram).

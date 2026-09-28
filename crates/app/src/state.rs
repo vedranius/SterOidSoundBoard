@@ -481,11 +481,11 @@ impl App {
 
     /// Voice analysis of a recording (optionally a [start, end] second range).
     pub fn analyze(&self, id: &str, start: Option<f32>, end: Option<f32>, settings: Option<AnalysisSettings>) -> Result<VoiceReport> {
-        if !self.clinic.lock().unwrap().recordings.iter().any(|r| r.id == id) {
-            return Err(anyhow!("no such recording"));
-        }
+        let dur = self.clinic.lock().unwrap().recordings.iter().find(|r| r.id == id).map(|r| r.duration).ok_or_else(|| anyhow!("no such recording"))?;
         let st = self.settings_or_default(settings);
-        if start.is_none() && end.is_none() {
+        // a selection covering the whole recording shares the cached whole-recording report
+        let whole = start.is_none_or(|a| a <= 0.001) && end.is_none_or(|b| b >= dur - 0.001);
+        if whole {
             return self.whole_report(id, &st).map(|r| (*r).clone());
         }
         let (x, sr) = load_rec(&self.paths.recordings, id)?;
@@ -635,7 +635,7 @@ impl App {
     // ------------------------------------------------------------ AI opinion
 
     /// Build the full AI request for a recording range. `image` is a data URL.
-    pub fn ai_job(&self, id: &str, start: Option<f32>, end: Option<f32>, question: &str, image: Option<&str>) -> Result<AiJob> {
+    pub fn ai_job(&self, id: &str, start: Option<f32>, end: Option<f32>, settings: Option<AnalysisSettings>, question: &str, image: Option<&str>) -> Result<AiJob> {
         let cfg = self.ai.lock().unwrap().clone();
         let (rec, patient, earlier) = {
             let c = self.clinic.lock().unwrap();
@@ -656,8 +656,8 @@ impl App {
                 return Err(anyhow!("pacijent nema zabilježenu suglasnost za AI analizu (Uredi pacijenta)"));
             }
         }
-        let report = self.analyze(id, start, end, None)?;
-        let st = self.settings_or_default(None);
+        let report = self.analyze(id, start, end, settings)?;
+        let st = self.settings_or_default(settings);
         let (a, b) = (start.unwrap_or(0.0).max(0.0), end.unwrap_or(rec.duration).min(rec.duration));
         let history: Vec<(String, String, analysis::VoiceReport)> = earlier
             .iter()

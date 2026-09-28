@@ -20,7 +20,7 @@ fn main() {
     println!("unvoiced_fraction {:.6}", r.unvoiced_fraction);
     println!("voice_breaks {}", r.voice_breaks);
     println!("jitter_local {}", o(r.jitter_local));
-    println!("jitter_abs {}", o(r.jitter_local_abs));
+    println!("jitter_abs {}", r.jitter_local_abs.map(|x| format!("{x:.10}")).unwrap_or_else(|| "--undefined--".into()));
     println!("jitter_rap {}", o(r.jitter_rap));
     println!("jitter_ppq5 {}", o(r.jitter_ppq5));
     println!("shimmer_local {}", o(r.shimmer_local));

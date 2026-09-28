@@ -3,7 +3,7 @@
 Real-time audio effects host for Linux, Windows and Raspberry Pi, controlled from any browser
 (desktop, tablet, phone). Inspired by MOD Desktop and Patchbox OS, rebuilt from scratch.
 
-**Status:** 0.3.0 — Music + DigiLingua modes on one engine, AI opinion for clinicians. See [CHANGELOG](CHANGELOG.md) and the roadmap below.
+**Status:** 0.4.0 — Music + DigiLingua modes on one engine; Praat-validated voice analysis with a Praat-style editor, live sonagram, progress tracking and AI opinion for clinicians. See [CHANGELOG](CHANGELOG.md) and the roadmap below.
 
 ## Two modes, one engine
 
@@ -16,11 +16,21 @@ Real-time audio effects host for Linux, Windows and Raspberry Pi, controlled fro
 Both modes edit the same board, so a therapist's settings can be fine-tuned on the pedalboard
 and a musician can use any clinical node (31-band EQ, DAF, pitch shift, noise, interrupter).
 
-**DigiLingua features:** patients and therapy sessions (timer, notes, settings snapshot),
-31-band ISO EQ, DAF (0–5 s, no echo), FAF (±12 st), masking noise (white/pink/brown/narrow-band,
-per ear), discontinuity filter, mic channel selection and per-ear volume, live sonagram + VU,
-lossless WAV recording, voice analysis (F0, jitter, shimmer, HNR, pauses, speech rate, phonation
-time) with a clinical report, full patient profiles, and an **AI opinion** for the rehabilitator.
+**DigiLingua features:** searchable patient list with full profiles, therapy sessions (timer, notes,
+settings snapshot, re-apply a session's settings), clinical presets (DigiLingua factory curves,
+therapy starting points, your own), audio device/status panel, 31-band ISO EQ (sliders or curve),
+DAF (0–5 s, no echo), FAF (±12 st), masking noise (white/pink/brown/narrow-band, per ear),
+discontinuity filter, per-ear volume and mute, signal-chain view, L/R level meters with peak hold,
+an enlargeable **live sonagram** (colour legend in dB, frequency/time axes, F0 and intensity
+overlays, hover readout, 5–30 ms windows), lossless WAV recording and keyboard shortcuts.
+
+**Voice analysis (Praat-compatible, [validated](VALIDATION.md)):** a Praat-style editor per
+recording — waveform with glottal pulses, spectrogram with pitch, intensity and formant tracks,
+zoom/scroll/play, spectral slice or LTAS, colour legend and cursor readouts — and Praat's full voice
+report (pitch, pulses, voicing, jitter ×5, shimmer ×6, HNR/NHR), CPPS (AVQI settings), formants,
+intensity (dB SPL with microphone calibration), phonation and fluency timing. Disfluency annotation
+tier (blocks, prolongations, repetitions… → %SS, SSI-style duration) with Praat TextGrid export,
+**progress charts** per patient, printable/PDF report and an **AI opinion** for the rehabilitator.
 
 **AI (optional, your own key):** Anthropic Claude (default `claude-opus-5`), any OpenAI-compatible
 API, or local Ollama. The AI gets measurements, a pseudonymised profile (no name, code or birth
@@ -67,18 +77,20 @@ cargo build --release
 
 ## Data directory
 Linux `~/.local/share/SterOidSoundBoard`, Windows `%APPDATA%\SterOidSoundBoard`:
-`boards/default.json` (autosave), `presets/`, `recordings/*.wav`, `clinic.json` (patients, sessions,
-recordings, AI opinions), `ai.json` (AI provider + key, owner-only), `audio.json`.
+`boards/default.json` (autosave), `presets/`, `clinic_presets/`, `recordings/*.wav`, `clinic.json`
+(patients, sessions, recordings and annotations, AI opinions, clinic settings), `ai.json` (AI provider + key, owner-only), `audio.json`.
 
 ## Roadmap
 - **0.2** ✅ DigiLingua mode, clinical nodes, recording, voice analysis, presets
 - **0.3** ✅ patient profiles, fluency measures, AI opinion (Claude / OpenAI-compatible / Ollama)
-- **0.4** PIN/login, native duplex backends (JACK/PipeWire, ASIO), Pisound support, state-preserving graph edits, PIN/login
-- **0.5** LV2 plugin hosting + plugin manager (open-source plugin catalog)
-- **0.6** Control-surface designer (custom tablet layouts), MIDI learn, OSC
-- **0.7** AI Lab: describe an effect → Faust DSP generated, compiled (JIT) and loaded live
+- **0.4** ✅ Praat-validated analysis + editor, live sonagram, DigiLingua workstation (presets, devices, progress, reports)
+- **0.5** PIN/login, native duplex backends (JACK/PipeWire, ASIO), Pisound support, state-preserving graph edits
+- **0.6** LV2 plugin hosting + plugin manager (open-source plugin catalog)
+- **0.7** Control-surface designer (custom tablet layouts), MIDI learn, OSC
+- **0.8** AI Lab: describe an effect → Faust DSP generated, compiled (JIT) and loaded live
   (Claude / OpenAI-compatible / Ollama, user's choice)
-- **0.8** Raspberry Pi image, snapshots, DigiLingua exercise protocols and progress charts
+- **0.9** Raspberry Pi image, snapshots, DigiLingua exercise protocols
 
 ## License
-GPL-3.0-or-later
+GPL-3.0-or-later. The voice analysis ports algorithms from [Praat](https://github.com/praat/praat.github.io)
+(Paul Boersma & David Weenink, GPL-3.0-or-later).

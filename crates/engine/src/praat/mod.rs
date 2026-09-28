@@ -198,14 +198,45 @@ pub fn praat_sinc(y: &[f64], x: f64, max_depth: usize) -> f64 {
         let (fil, fir) = (x - midleft as f64, midright as f64 - x);
         return yl * fir + yr * fil - fil * fir * (0.5 * (dyr - dyl) + (fil - 0.5) * (dyl + dyr - 2.0 * (yr - yl)));
     }
-    let d = depth as f64 + 0.5;
     let (left, right) = (midright - depth, midleft + depth);
-    let mut acc = 0.0;
-    for i in left..=right {
-        let u = (x - i as f64).abs();
-        acc += y[i - 1] * sinc(u) * 0.5 * (1.0 + (PI * u / d).cos());
+    sinc_taps(|i| y[i as usize - 1], x, left as isize, right as isize, depth as f64 + 0.5)
+}
+
+/// Praat's `NUM_interpolate_sinc` inner sum over taps `left..=right` around a
+/// non-integer `x`, with a raised-cosine window of half-width `window`. Like
+/// Praat it runs outwards from the centre (left half, then right half) and
+/// advances sin/cos by recurrence instead of evaluating them per tap; the
+/// same order of operations keeps results equal to Praat's.
+#[inline]
+fn sinc_taps(y: impl Fn(isize) -> f64, x: f64, left: isize, right: isize, window: f64) -> f64 {
+    let midleft = x.floor() as isize;
+    let midright = midleft + 1;
+    let step = PI / window;
+    let (sin_step, cos_step) = (step.sin(), step.cos());
+    let mut result = 0.0;
+    let mut phase = PI * (x - midleft as f64);
+    let mut half_sin = 0.5 * phase.sin();
+    let (mut sw, mut cw) = ((phase / window).sin(), (phase / window).cos());
+    let mut ix = midleft;
+    while ix >= left {
+        result += y(ix) * (half_sin / phase * (1.0 + cw));
+        phase += PI;
+        half_sin = -half_sin;
+        (sw, cw) = (cw * sin_step + sw * cos_step, cw * cos_step - sw * sin_step);
+        ix -= 1;
     }
-    acc
+    phase = PI * (midright as f64 - x);
+    half_sin = 0.5 * phase.sin();
+    (sw, cw) = ((phase / window).sin(), (phase / window).cos());
+    ix = midright;
+    while ix <= right {
+        result += y(ix) * (half_sin / phase * (1.0 + cw));
+        phase += PI;
+        half_sin = -half_sin;
+        (sw, cw) = (cw * sin_step + sw * cos_step, cw * cos_step - sw * sin_step);
+        ix += 1;
+    }
+    result
 }
 
 #[inline]
@@ -220,14 +251,7 @@ pub fn interpolate_sinc(y: impl Fn(isize) -> f64, x: f64, depth: usize) -> f64 {
     if (x - c as f64).abs() < 1e-12 {
         return y(c);
     }
-    let d = depth as f64;
-    let mut acc = 0.0;
-    for k in (c - depth as isize + 1)..=(c + depth as isize) {
-        let u = x - k as f64;
-        let w = 0.5 + 0.5 * (PI * u / (d + 0.5)).cos();
-        acc += y(k) * sinc(u) * w;
-    }
-    acc
+    sinc_taps(y, x, c - depth as isize + 1, c + depth as isize, depth as f64 + 0.5)
 }
 
 /// Maximise a smooth function on [a, b] (golden-section search). Returns (x, f(x)).
