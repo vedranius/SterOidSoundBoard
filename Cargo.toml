@@ -14,3 +14,7 @@ lto = "thin"
 codegen-units = 1
 panic = "abort"
 strip = true
+
+# Analysis tests (pitch, formants, CPPS) are numerically heavy: optimise test builds.
+[profile.test]
+opt-level = 2

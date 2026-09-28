@@ -1,56 +1,114 @@
-//! Acoustic voice analysis (DigiLingua): F0 track, jitter, shimmer, HNR.
-//! Follows Praat's approach (Boersma 1993 autocorrelation pitch, peak-picked
-//! glottal periods) so values are comparable to the usual clinical norms.
-//! Runs on the control thread on recorded audio.
-use crate::fft::{hann, Fft};
-use serde::Serialize;
-
-const FMIN: f32 = 75.0;
-const FMAX: f32 = 600.0;
-const VOICING: f32 = 0.45;
-const SILENCE: f32 = 0.03;
-const OCTAVE_COST: f32 = 0.01;
-const MAX_PERIOD_FACTOR: f32 = 1.3;
-const MAX_AMP_FACTOR: f32 = 1.6;
+//! Acoustic voice analysis (DigiLingua). Measures come from the
+//! Praat-compatible engine in [`crate::praat`] (validated against Praat 7:
+//! identical pitch, pulses, jitter, shimmer, HNR, voicing and intensity;
+//! formants and CPPS within ±0.5 % on clean signals — see VALIDATION.md).
+//! This module adds clinical timing measures, a Croatian report and the
+//! tracks the analysis editor draws. Control thread only.
+use crate::praat::{self, cepstrum, formant, intensity, pitch, pulses, voice, Sound};
+use serde::{Deserialize, Serialize};
 
 /// Clinical reference thresholds (MDVP / Praat literature, sustained vowel).
 pub const JITTER_MAX: f32 = 1.04; // %
 pub const SHIMMER_MAX: f32 = 3.81; // %
 pub const SHIMMER_DB_MAX: f32 = 0.35; // dB
 pub const HNR_MIN: f32 = 20.0; // dB
+/// Offset from Praat's uncalibrated dB (1.0 = 1 Pa) to dBFS.
+pub const PRAAT_DB_TO_DBFS: f64 = -93.9794;
+/// CPPS is O(n²) per frame (robust trend line): analyse at most this much.
+const CPPS_MAX_SECONDS: f64 = 60.0;
+
+/// User-adjustable analysis parameters (Praat names and defaults).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct AnalysisSettings {
+    pub pitch_floor: f64,
+    pub pitch_ceiling: f64,
+    /// Formant ceiling: 5500 Hz (women, children), 5000 Hz (men).
+    pub max_formant: f64,
+    pub n_formants: f64,
+    pub cpps: bool,
+}
+
+impl Default for AnalysisSettings {
+    fn default() -> Self {
+        AnalysisSettings { pitch_floor: 75.0, pitch_ceiling: 600.0, max_formant: 5500.0, n_formants: 5.0, cpps: true }
+    }
+}
+
+impl AnalysisSettings {
+    /// Clamp to ranges the algorithms support.
+    pub fn sanitized(mut self) -> Self {
+        self.pitch_floor = if self.pitch_floor.is_finite() { self.pitch_floor.clamp(30.0, 500.0) } else { 75.0 };
+        self.pitch_ceiling = if self.pitch_ceiling.is_finite() { self.pitch_ceiling.clamp(self.pitch_floor + 20.0, 1500.0) } else { 600.0 };
+        self.max_formant = if self.max_formant.is_finite() { self.max_formant.clamp(2000.0, 8000.0) } else { 5500.0 };
+        self.n_formants = if self.n_formants.is_finite() { self.n_formants.clamp(3.0, 7.0) } else { 5.0 };
+        self
+    }
+    fn pitch_params(&self) -> pitch::PitchParams {
+        pitch::PitchParams { floor: self.pitch_floor, ceiling: self.pitch_ceiling, ..Default::default() }
+    }
+    fn formant_params(&self) -> formant::FormantParams {
+        formant::FormantParams { max_formant: self.max_formant, n_formants: self.n_formants, ..Default::default() }
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct VoiceReport {
+    pub settings: AnalysisSettings,
     pub duration: f32,
     pub sample_rate: u32,
+    /// Fraction of pitch frames on the voiced path (0–1).
     pub voiced_fraction: f32,
     pub f0_mean: Option<f32>,
     pub f0_median: Option<f32>,
     pub f0_sd: Option<f32>,
     pub f0_min: Option<f32>,
     pub f0_max: Option<f32>,
-    /// Jitter (local), %.
+    /// F0 range between the 5th and 95th percentile, semitones.
+    pub f0_range_st: Option<f32>,
+    // --- Praat voice report (percentages unless noted)
+    pub pulses: usize,
+    pub periods: usize,
+    pub mean_period_ms: Option<f32>,
+    pub sd_period_ms: Option<f32>,
+    /// Praat "fraction of locally unvoiced frames", %.
+    pub unvoiced_fraction: f32,
+    pub voice_breaks: usize,
+    /// Praat "degree of voice breaks", %.
+    pub voice_break_degree: f32,
     pub jitter_local: Option<f32>,
     /// Jitter (local, absolute), µs.
     pub jitter_abs_us: Option<f32>,
-    /// Jitter (RAP), %.
     pub jitter_rap: Option<f32>,
-    /// Shimmer (local), %.
+    pub jitter_ppq5: Option<f32>,
+    pub jitter_ddp: Option<f32>,
     pub shimmer_local: Option<f32>,
     /// Shimmer (local, dB).
     pub shimmer_db: Option<f32>,
+    pub shimmer_apq3: Option<f32>,
+    pub shimmer_apq5: Option<f32>,
+    pub shimmer_apq11: Option<f32>,
+    pub shimmer_dda: Option<f32>,
+    pub mean_autocorrelation: Option<f32>,
+    pub nhr: Option<f32>,
     /// Harmonics-to-noise ratio, dB (mean over voiced frames).
     pub hnr_db: Option<f32>,
-    /// RMS level of voiced frames, dBFS.
+    // --- spectral / cepstral
+    /// Smoothed cepstral peak prominence (AVQI settings), dB.
+    pub cpps: Option<f32>,
+    pub cpps_note: Option<String>,
+    /// Median F1–F4 over voiced frames, Hz.
+    pub formants: [Option<f32>; 4],
+    // --- intensity (Praat scale: uncalibrated dB, sample 1.0 = 1 Pa)
+    pub intensity_mean_db: Option<f32>,
+    pub intensity_min_db: Option<f32>,
+    pub intensity_max_db: Option<f32>,
+    pub intensity_sd_db: Option<f32>,
+    /// Mean level of voiced frames, dBFS.
     pub intensity_dbfs: Option<f32>,
-    pub periods: usize,
-    /// F0 range between the 5th and 95th percentile, semitones.
-    pub f0_range_st: Option<f32>,
+    // --- timing / fluency
     /// Longest continuous voiced stretch, s (maximum phonation time on a sustained vowel).
     pub max_voiced_s: f32,
-    /// Unvoiced gaps between voiced stretches, and their share of the voiced span (%).
-    pub voice_breaks: usize,
-    pub voice_break_degree: f32,
     /// Silent pauses ≥ 250 ms inside the utterance.
     pub pauses: usize,
     pub pause_mean_s: f32,
@@ -62,7 +120,7 @@ pub struct VoiceReport {
     pub speech_rate: f32,
     /// Nuclei per second of speaking time (pauses excluded).
     pub articulation_rate: f32,
-    /// [time s, f0 Hz or 0 when unvoiced] every 10 ms.
+    /// [time s, f0 Hz or 0 when unvoiced] per pitch frame.
     pub pitch: Vec<[f32; 2]>,
     /// True if every measured parameter is inside the reference range.
     pub normal: bool,
@@ -71,270 +129,185 @@ pub struct VoiceReport {
     pub report: String,
 }
 
-struct Frame {
-    t: f32,
-    f0: f32,
-    r: f32,
-    rms: f32,
+/// Contours for the analysis editor (times relative to the analysed sound).
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct Tracks {
+    pub duration: f32,
+    pub sample_rate: u32,
+    pub settings: AnalysisSettings,
+    /// [t, f0 (0 = unvoiced), strength]
+    pub pitch: Vec<[f32; 3]>,
+    /// [t, dB (Praat scale)]
+    pub intensity: Vec<[f32; 2]>,
+    /// [t, F1, B1, F2, B2, …] (0 = none), only frames above the silence level.
+    pub formants: Vec<Vec<f32>>,
+    /// Glottal pulse times.
+    pub pulses: Vec<f32>,
 }
 
-fn pitch_track(x: &[f32], sr: f32) -> (Vec<Frame>, f32) {
-    let l = (3.0 * sr / FMIN) as usize;
-    let hop = ((0.01 * sr) as usize).max(1);
-    let fft = Fft::new((2 * l).next_power_of_two());
-    let win = hann(l);
-    let mut rw = vec![];
-    fft.autocorr(&win, &mut rw);
-    let rw0 = rw[0];
-    let global = x.iter().fold(0f32, |m, v| m.max(v.abs())).max(1e-9);
-    let tmin = (sr / FMAX).floor().max(2.0) as usize;
-    let tmax = (l / 3).min((sr / FMIN).ceil() as usize);
-    let mut frames = vec![];
-    let mut buf = vec![0.0; l];
-    let mut ac = vec![];
-    let mut s = 0;
-    while s + l <= x.len() {
-        let seg = &x[s..s + l];
-        let mean = seg.iter().sum::<f32>() / l as f32;
-        let local = seg.iter().fold(0f32, |m, v| m.max((v - mean).abs()));
-        let rms = (seg.iter().map(|v| (v - mean) * (v - mean)).sum::<f32>() / l as f32).sqrt();
-        let t = (s + l / 2) as f32 / sr;
-        let mut fr = Frame { t, f0: 0.0, r: 0.0, rms };
-        if local >= SILENCE * global {
-            for i in 0..l {
-                buf[i] = (seg[i] - mean) * win[i];
-            }
-            fft.autocorr(&buf, &mut ac);
-            if ac[0] > 0.0 {
-                let r = |k: usize| (ac[k] / ac[0]) / (rw[k] / rw0).max(1e-6);
-                let mut best = (f32::MIN, 0.0, 0.0);
-                for k in tmin.max(1)..tmax {
-                    let (a, b, c) = (r(k - 1), r(k), r(k + 1));
-                    if b > a && b >= c && b > 0.5 * VOICING {
-                        let den = a - 2.0 * b + c;
-                        let d = if den.abs() > 1e-12 { (0.5 * (a - c) / den).clamp(-0.5, 0.5) } else { 0.0 };
-                        let tau = k as f32 + d;
-                        let rr = (b - 0.25 * (a - c) * d).min(1.0);
-                        let strength = rr - OCTAVE_COST * (FMIN * tau / sr).log2();
-                        if strength > best.0 {
-                            best = (strength, tau, rr);
-                        }
-                    }
-                }
-                if best.2 > VOICING {
-                    fr.f0 = sr / best.1;
-                    fr.r = best.2;
-                }
-            }
-        }
-        frames.push(fr);
-        s += hop;
-    }
-    // 5-point median over voiced neighbours removes isolated octave jumps;
-    // runs shorter than 3 frames are treated as unvoiced.
-    let f0s: Vec<f32> = frames.iter().map(|f| f.f0).collect();
-    for i in 0..frames.len() {
-        if f0s[i] == 0.0 {
-            continue;
-        }
-        let mut v: Vec<f32> = f0s[i.saturating_sub(2)..(i + 3).min(f0s.len())].iter().copied().filter(|&f| f > 0.0).collect();
-        v.sort_by(f32::total_cmp);
-        frames[i].f0 = v[v.len() / 2];
-    }
-    let mut i = 0;
-    while i < frames.len() {
-        if frames[i].f0 > 0.0 {
-            let j = (i..frames.len()).find(|&k| frames[k].f0 == 0.0).unwrap_or(frames.len());
-            if j - i < 3 {
-                frames[i..j].iter_mut().for_each(|f| f.f0 = 0.0);
-            }
-            i = j;
-        } else {
-            i += 1;
-        }
-    }
-    (frames, hop as f32 / sr)
+fn f(v: Option<f64>) -> Option<f32> {
+    v.map(|x| x as f32)
 }
-
-/// Peak-picked glottal cycle marks in voiced runs: (sample position, peak amplitude, run id).
-fn period_marks(x: &[f32], sr: f32, frames: &[Frame], hop: f32) -> Vec<(f32, f32, usize)> {
-    let mut marks = vec![];
-    let mut run = 0;
-    let mut i = 0;
-    while i < frames.len() {
-        if frames[i].f0 == 0.0 {
-            i += 1;
-            continue;
-        }
-        let j = (i..frames.len()).find(|&k| frames[k].f0 == 0.0).unwrap_or(frames.len());
-        let run_frames = &frames[i..j];
-        let a = (((run_frames[0].t - hop) * sr).max(0.0)) as usize;
-        let b = (((run_frames[run_frames.len() - 1].t + hop) * sr) as usize).min(x.len());
-        let f0_at = |pos: usize| -> f32 {
-            let t = pos as f32 / sr;
-            let k = run_frames.partition_point(|f| f.t < t);
-            if k == 0 {
-                run_frames[0].f0
-            } else if k >= run_frames.len() {
-                run_frames[run_frames.len() - 1].f0
-            } else {
-                let (p, q) = (&run_frames[k - 1], &run_frames[k]);
-                p.f0 + (q.f0 - p.f0) * (t - p.t) / (q.t - p.t)
-            }
-        };
-        let seg = &x[a..b];
-        let (mx, mn) = seg.iter().fold((f32::MIN, f32::MAX), |(hi, lo), &v| (hi.max(v), lo.min(v)));
-        let sign = if -mn > mx { -1.0 } else { 1.0 };
-        let argmax = |lo: usize, hi: usize| -> usize {
-            (lo..hi).max_by(|&p, &q| (sign * x[p]).total_cmp(&(sign * x[q]))).unwrap_or(lo)
-        };
-        let t0 = sr / f0_at(a);
-        let mut cur = argmax(a, (a + t0 as usize + 1).min(b));
-        loop {
-            let (y0, y1, y2) = if cur > 0 && cur + 1 < x.len() {
-                (sign * x[cur - 1], sign * x[cur], sign * x[cur + 1])
-            } else {
-                (0.0, sign * x[cur], 0.0)
-            };
-            let den = y0 - 2.0 * y1 + y2;
-            let d = if den.abs() > 1e-12 { (0.5 * (y0 - y2) / den).clamp(-0.5, 0.5) } else { 0.0 };
-            marks.push((cur as f32 + d, y1 - 0.25 * (y0 - y2) * d, run));
-            let t = sr / f0_at(cur);
-            let (lo, hi) = (cur + (0.8 * t) as usize, cur + (1.2 * t) as usize + 1);
-            if hi >= b {
-                break;
-            }
-            cur = argmax(lo, hi);
-        }
-        run += 1;
-        i = j;
-    }
-    marks
-}
-
-fn mean(v: &[f32]) -> f32 {
-    v.iter().sum::<f32>() / v.len() as f32
+fn pct(v: Option<f64>) -> Option<f32> {
+    v.map(|x| (x * 100.0) as f32)
 }
 
 pub fn analyze(x: &[f32], sr: f32) -> VoiceReport {
-    let mut rep = VoiceReport { duration: x.len() as f32 / sr, sample_rate: sr as u32, ..Default::default() };
-    if rep.duration < 0.1 {
+    analyze_with(x, sr, &AnalysisSettings::default())
+}
+
+pub fn analyze_with(x: &[f32], sr: f32, settings: &AnalysisSettings) -> VoiceReport {
+    let st = settings.sanitized();
+    let mut rep = VoiceReport { settings: st, duration: x.len() as f32 / sr, sample_rate: sr as u32, ..Default::default() };
+    if rep.duration < 0.1 || (x.len() as f64) < 6.4 / 100.0 * sr as f64 {
         rep.findings.push("Odabir je prekratak za analizu (minimalno 100 ms).".into());
         rep.report = rep.findings[0].clone();
         return rep;
     }
-    let (frames, hop) = pitch_track(x, sr);
-    rep.pitch = frames.iter().map(|f| [f.t, f.f0]).collect();
-    let voiced: Vec<&Frame> = frames.iter().filter(|f| f.f0 > 0.0).collect();
-    rep.voiced_fraction = if frames.is_empty() { 0.0 } else { voiced.len() as f32 / frames.len() as f32 };
-    if voiced.len() >= 3 {
-        let mut f0: Vec<f32> = voiced.iter().map(|f| f.f0).collect();
-        let m = mean(&f0);
-        rep.f0_mean = Some(m);
-        rep.f0_sd = Some((f0.iter().map(|v| (v - m) * (v - m)).sum::<f32>() / f0.len() as f32).sqrt());
-        f0.sort_by(f32::total_cmp);
-        rep.f0_median = Some(f0[f0.len() / 2]);
-        rep.f0_min = f0.first().copied();
-        rep.f0_max = f0.last().copied();
-        let hnr: Vec<f32> = voiced.iter().map(|f| {
-            let r = f.r.clamp(1e-6, 0.99999);
-            10.0 * (r / (1.0 - r)).log10()
-        }).collect();
-        rep.hnr_db = Some(mean(&hnr));
-        let pw = mean(&voiced.iter().map(|f| f.rms * f.rms).collect::<Vec<_>>());
-        rep.intensity_dbfs = Some(10.0 * (pw + 1e-12).log10());
+    let s = Sound::new(x, sr);
+    let pp = st.pitch_params();
+    let pt = pitch::to_pitch(&s, &pp);
+    let pl = pulses::to_pulses(&s, &pt);
+    let vr = voice::voice_report(&s, &pt, &pl, 0.0, s.duration(), &pp);
+    let it = intensity::to_intensity(&s, 100.0, 0.0);
 
-        let marks = period_marks(x, sr, &frames, hop);
-        // (period s, amplitude, run)
-        let per: Vec<(f32, f32, usize)> = marks
-            .windows(2)
-            .filter(|w| w[0].2 == w[1].2)
-            .map(|w| ((w[1].0 - w[0].0) / sr, w[0].1, w[0].2))
-            .filter(|p| p.0 >= 1.0 / (FMAX * 1.25) && p.0 <= 1.25 / FMIN)
-            .collect();
-        rep.periods = per.len();
-        if per.len() >= 10 {
-            let mean_t = mean(&per.iter().map(|p| p.0).collect::<Vec<_>>());
-            let mean_a = mean(&per.iter().map(|p| p.1.abs()).collect::<Vec<_>>());
-            let (mut jd, mut jn, mut sd, mut sdb, mut sn, mut rap, mut rn) = (0.0, 0, 0.0, 0.0, 0, 0.0, 0);
-            for w in per.windows(2) {
-                let (p, q) = (w[0], w[1]);
-                if p.2 != q.2 {
-                    continue;
-                }
-                if p.0.max(q.0) / p.0.min(q.0) <= MAX_PERIOD_FACTOR {
-                    jd += (p.0 - q.0).abs();
-                    jn += 1;
-                }
-                let (a, b) = (p.1.abs().max(1e-9), q.1.abs().max(1e-9));
-                if a.max(b) / a.min(b) <= MAX_AMP_FACTOR {
-                    sd += (a - b).abs();
-                    sdb += (20.0 * (b / a).log10()).abs();
-                    sn += 1;
-                }
-            }
-            for w in per.windows(3) {
-                if w[0].2 == w[2].2 && w[0].0.max(w[1].0).max(w[2].0) / w[0].0.min(w[1].0).min(w[2].0) <= MAX_PERIOD_FACTOR {
-                    rap += (w[1].0 - (w[0].0 + w[1].0 + w[2].0) / 3.0).abs();
-                    rn += 1;
-                }
-            }
-            if jn > 0 {
-                rep.jitter_local = Some(jd / jn as f32 / mean_t * 100.0);
-                rep.jitter_abs_us = Some(jd / jn as f32 * 1e6);
-            }
-            if rn > 0 {
-                rep.jitter_rap = Some(rap / rn as f32 / mean_t * 100.0);
-            }
-            if sn > 0 {
-                rep.shimmer_local = Some(sd / sn as f32 / mean_a * 100.0);
-                rep.shimmer_db = Some(sdb / sn as f32);
-            }
+    rep.pitch = (0..pt.len()).map(|i| [pt.time(i) as f32, pt.f0[i] as f32]).collect();
+    rep.voiced_fraction = if pt.len() > 0 { (0..pt.len()).filter(|&i| pt.voiced(i)).count() as f32 / pt.len() as f32 } else { 0.0 };
+    rep.f0_mean = f(vr.mean_pitch);
+    rep.f0_median = f(vr.median_pitch);
+    rep.f0_sd = f(vr.sd_pitch);
+    rep.f0_min = f(vr.min_pitch);
+    rep.f0_max = f(vr.max_pitch);
+    let mut f0s: Vec<f64> = pt.f0.iter().copied().filter(|&v| v > 0.0).collect();
+    f0s.sort_by(f64::total_cmp);
+    if f0s.len() >= 10 {
+        if let (Some(a), Some(b)) = (praat::quantile(&f0s, 0.05), praat::quantile(&f0s, 0.95)) {
+            rep.f0_range_st = Some((12.0 * (b / a).log2()) as f32);
         }
     }
-    temporal(&mut rep, &frames, hop);
+    rep.pulses = vr.pulses;
+    rep.periods = vr.periods;
+    rep.mean_period_ms = vr.mean_period.map(|v| (v * 1000.0) as f32);
+    rep.sd_period_ms = vr.sd_period.map(|v| (v * 1000.0) as f32);
+    rep.unvoiced_fraction = (vr.unvoiced_fraction * 100.0) as f32;
+    rep.voice_breaks = vr.voice_breaks;
+    rep.voice_break_degree = (vr.voice_break_degree * 100.0) as f32;
+    rep.jitter_local = pct(vr.jitter_local);
+    rep.jitter_abs_us = vr.jitter_local_abs.map(|v| (v * 1e6) as f32);
+    rep.jitter_rap = pct(vr.jitter_rap);
+    rep.jitter_ppq5 = pct(vr.jitter_ppq5);
+    rep.jitter_ddp = pct(vr.jitter_ddp);
+    rep.shimmer_local = pct(vr.shimmer_local);
+    rep.shimmer_db = f(vr.shimmer_local_db);
+    rep.shimmer_apq3 = pct(vr.shimmer_apq3);
+    rep.shimmer_apq5 = pct(vr.shimmer_apq5);
+    rep.shimmer_apq11 = pct(vr.shimmer_apq11);
+    rep.shimmer_dda = pct(vr.shimmer_dda);
+    rep.mean_autocorrelation = f(vr.mean_autocorrelation);
+    rep.nhr = f(vr.mean_nhr);
+    rep.hnr_db = f(vr.mean_hnr);
+
+    // intensity statistics (whole selection) and level of the voiced parts
+    let db: Vec<f64> = it.db.iter().copied().filter(|&v| v > -299.0).collect();
+    if !db.is_empty() {
+        let m = db.iter().sum::<f64>() / db.len() as f64;
+        rep.intensity_mean_db = Some(m as f32);
+        rep.intensity_min_db = f(db.iter().copied().reduce(f64::min));
+        rep.intensity_max_db = f(db.iter().copied().reduce(f64::max));
+        if db.len() > 1 {
+            rep.intensity_sd_db = Some((db.iter().map(|v| (v - m) * (v - m)).sum::<f64>() / (db.len() - 1) as f64).sqrt() as f32);
+        }
+    }
+    let voiced_db: Vec<f64> = (0..it.db.len()).filter(|&i| pt.value_at(it.time(i)).is_some()).map(|i| it.db[i]).collect();
+    if !voiced_db.is_empty() {
+        let pw = voiced_db.iter().map(|v| 10f64.powf(v / 10.0)).sum::<f64>() / voiced_db.len() as f64;
+        rep.intensity_dbfs = Some((10.0 * pw.log10() + PRAAT_DB_TO_DBFS) as f32);
+    }
+
+    // formants: medians over voiced frames
+    if !f0s.is_empty() {
+        let fr = formant::to_formants(&s, &st.formant_params());
+        for k in 0..4 {
+            let mut v: Vec<f64> =
+                fr.iter().filter(|x| pt.value_at(x.t).is_some()).filter_map(|x| x.formants.get(k).map(|p| p.0)).collect();
+            v.sort_by(f64::total_cmp);
+            rep.formants[k] = f(praat::quantile(&v, 0.5));
+        }
+    }
+    // CPPS (bounded cost on very long selections)
+    if st.cpps && !f0s.is_empty() {
+        let limit = (CPPS_MAX_SECONDS * s.sr) as usize;
+        let cs = if s.x.len() > limit {
+            rep.cpps_note = Some(format!("CPPS izračunat na prvih {CPPS_MAX_SECONDS:.0} s odabira."));
+            Sound { x: s.x[..limit].to_vec(), sr: s.sr }
+        } else {
+            s.clone()
+        };
+        rep.cpps = f(cepstrum::cpps(&cs, &cepstrum::CppsParams::default()));
+    }
+    temporal(&mut rep, &pt, &it);
     write_report(&mut rep);
     rep
 }
 
-const PAUSE_MIN_S: f32 = 0.25;
-const SILENCE_BELOW_PEAK_DB: f32 = 25.0;
-const NUCLEUS_DIP_DB: f32 = 2.0;
-
-/// Timing and prosody measures used for fluency (stuttering, cluttering)
-/// and connected speech. Intensity comes from the pitch-track frames.
-fn temporal(r: &mut VoiceReport, frames: &[Frame], hop: f32) {
-    if frames.is_empty() {
-        return;
+/// Contours for drawing (pitch, intensity, formants, pulses).
+pub fn tracks(x: &[f32], sr: f32, settings: &AnalysisSettings) -> Tracks {
+    let st = settings.sanitized();
+    let mut out = Tracks { duration: x.len() as f32 / sr, sample_rate: sr as u32, settings: st, ..Default::default() };
+    if (x.len() as f64) < 0.1 * sr as f64 {
+        return out;
     }
-    let voiced: Vec<bool> = frames.iter().map(|f| f.f0 > 0.0).collect();
-    // voicing: longest run, breaks inside the voiced span
+    let s = Sound::new(x, sr);
+    let pp = st.pitch_params();
+    let pt = pitch::to_pitch(&s, &pp);
+    out.pitch = (0..pt.len()).map(|i| [pt.time(i) as f32, pt.f0[i] as f32, pt.strength[i] as f32]).collect();
+    out.pulses = pulses::to_pulses(&s, &pt).into_iter().map(|t| t as f32).collect();
+    let it = intensity::to_intensity(&s, 100.0, 0.0);
+    out.intensity = (0..it.db.len()).map(|i| [it.time(i) as f32, it.db[i].max(0.0) as f32]).collect();
+    let peak = it.db.iter().copied().fold(f64::MIN, f64::max);
+    out.formants = formant::to_formants(&s, &st.formant_params())
+        .into_iter()
+        .filter(|fr| it.value_at(fr.t).is_some_and(|d| d > peak - 30.0))
+        .map(|fr| {
+            let mut v = vec![fr.t as f32];
+            for k in 0..(st.n_formants.ceil() as usize) {
+                let (fq, bw) = fr.formants.get(k).copied().unwrap_or((0.0, 0.0));
+                v.push(fq as f32);
+                v.push(bw as f32);
+            }
+            v
+        })
+        .collect();
+    out
+}
+
+const PAUSE_MIN_S: f64 = 0.25;
+const SILENCE_BELOW_PEAK_DB: f64 = 25.0;
+const NUCLEUS_DIP_DB: f64 = 2.0;
+/// Absolute silence floor on Praat's scale (≈ −70 dBFS).
+const ABS_SILENCE_DB: f64 = 24.0;
+
+/// Timing and prosody measures for fluency (stuttering, cluttering) and
+/// connected speech, from the Praat pitch and intensity contours.
+fn temporal(r: &mut VoiceReport, pt: &pitch::Pitch, it: &intensity::Intensity) {
     let (mut best, mut run) = (0usize, 0usize);
-    for &v in &voiced {
-        run = if v { run + 1 } else { 0 };
+    for i in 0..pt.len() {
+        run = if pt.voiced(i) { run + 1 } else { 0 };
         best = best.max(run);
     }
-    r.max_voiced_s = best as f32 * hop;
-    if let (Some(a), Some(b)) = (voiced.iter().position(|&v| v), voiced.iter().rposition(|&v| v)) {
-        let span = &voiced[a..=b];
-        r.voice_breaks = span.windows(2).filter(|w| w[0] && !w[1]).count();
-        r.voice_break_degree = span.iter().filter(|&&v| !v).count() as f32 / span.len() as f32 * 100.0;
+    r.max_voiced_s = (best as f64 * pt.dt) as f32;
+    let db = &it.db;
+    if db.is_empty() {
+        return;
     }
-    let mut f0: Vec<f32> = frames.iter().map(|f| f.f0).filter(|&f| f > 0.0).collect();
-    if f0.len() >= 10 {
-        f0.sort_by(f32::total_cmp);
-        let q = |p: f32| f0[((f0.len() - 1) as f32 * p) as usize];
-        r.f0_range_st = Some(12.0 * (q(0.95) / q(0.05)).log2());
-    }
-    // intensity: sounding vs silent frames relative to the loud end of the recording
-    let db: Vec<f32> = frames.iter().map(|f| 20.0 * (f.rms + 1e-9).log10()).collect();
     let mut sorted = db.clone();
-    sorted.sort_by(f32::total_cmp);
-    let q99 = sorted[((sorted.len() - 1) as f32 * 0.99) as usize];
-    let thr = (q99 - SILENCE_BELOW_PEAK_DB).max(-70.0);
+    sorted.sort_by(f64::total_cmp);
+    let q99 = sorted[((sorted.len() - 1) as f64 * 0.99) as usize];
+    let thr = (q99 - SILENCE_BELOW_PEAK_DB).max(ABS_SILENCE_DB);
     let sounding: Vec<bool> = db.iter().map(|&d| d > thr).collect();
     let (Some(a), Some(b)) = (sounding.iter().position(|&v| v), sounding.iter().rposition(|&v| v)) else { return };
-    let span_s = (b - a + 1) as f32 * hop;
+    let hop = it.dt;
+    let span_s = (b - a + 1) as f64 * hop;
     let min_frames = (PAUSE_MIN_S / hop).ceil() as usize;
     let (mut pauses, mut pause_frames, mut i) = (0usize, 0usize, a);
     while i <= b {
@@ -350,18 +323,17 @@ fn temporal(r: &mut VoiceReport, frames: &[Frame], hop: f32) {
         i = j;
     }
     r.pauses = pauses;
-    r.pause_mean_s = if pauses > 0 { pause_frames as f32 * hop / pauses as f32 } else { 0.0 };
-    r.pause_ratio = pause_frames as f32 * hop / span_s * 100.0;
-    // syllable nuclei: voiced intensity peaks separated by dips of ≥ 2 dB
+    r.pause_mean_s = if pauses > 0 { (pause_frames as f64 * hop / pauses as f64) as f32 } else { 0.0 };
+    r.pause_ratio = (pause_frames as f64 * hop / span_s * 100.0) as f32;
     let mut kept: Vec<usize> = vec![];
     for k in (a + 1)..b {
-        if !(db[k] >= db[k - 1] && db[k] > db[k + 1] && sounding[k] && voiced[k]) {
+        if !(db[k] >= db[k - 1] && db[k] > db[k + 1] && sounding[k] && pt.value_at(it.time(k)).is_some()) {
             continue;
         }
         match kept.last().copied() {
             None => kept.push(k),
             Some(last) => {
-                let dip = db[last..=k].iter().copied().fold(f32::MAX, f32::min);
+                let dip = db[last..=k].iter().copied().fold(f64::MAX, f64::min);
                 if db[k] - dip >= NUCLEUS_DIP_DB && db[last] - dip >= NUCLEUS_DIP_DB {
                     kept.push(k);
                 } else if db[k] > db[last] {
@@ -371,33 +343,51 @@ fn temporal(r: &mut VoiceReport, frames: &[Frame], hop: f32) {
         }
     }
     r.syllable_nuclei = kept.len();
-    r.speech_rate = kept.len() as f32 / span_s;
-    let speaking = span_s - pause_frames as f32 * hop;
-    r.articulation_rate = if speaking > 0.0 { kept.len() as f32 / speaking } else { 0.0 };
+    r.speech_rate = (kept.len() as f64 / span_s) as f32;
+    let speaking = span_s - pause_frames as f64 * hop;
+    r.articulation_rate = if speaking > 0.0 { (kept.len() as f64 / speaking) as f32 } else { 0.0 };
 }
 
 fn write_report(r: &mut VoiceReport) {
     use std::fmt::Write;
-    let mut s = String::from("KLINIČKI IZVJEŠTAJ — AKUSTIČKA ANALIZA GLASA\n\n");
+    let mut s = String::from("KLINIČKI IZVJEŠTAJ — AKUSTIČKA ANALIZA GLASA\n");
     let o = |v: Option<f32>, d: usize| v.map(|x| format!("{x:.d$}")).unwrap_or_else(|| "—".into());
-    let _ = writeln!(s, "Trajanje odabira: {:.2} s · zvučni dio: {:.0} %", r.duration, r.voiced_fraction * 100.0);
+    let st = &r.settings;
     let _ = writeln!(
         s,
-        "➤ F0 (osnovna frekvencija): {} Hz  (medijan {}, SD {}, raspon {}–{} Hz)",
-        o(r.f0_mean, 1), o(r.f0_median, 1), o(r.f0_sd, 1), o(r.f0_min, 1), o(r.f0_max, 1)
+        "(algoritmi Praat · raspon F0 {:.0}–{:.0} Hz · maks. formant {:.0} Hz)\n",
+        st.pitch_floor, st.pitch_ceiling, st.max_formant
     );
-    let _ = writeln!(s, "➤ Jitter (local): {} %   [norma < {JITTER_MAX} %]", o(r.jitter_local, 2));
-    let _ = writeln!(s, "➤ Jitter (abs): {} µs", o(r.jitter_abs_us, 1));
-    let _ = writeln!(s, "➤ Jitter (RAP): {} %", o(r.jitter_rap, 2));
-    let _ = writeln!(s, "➤ Shimmer (local): {} %   [norma < {SHIMMER_MAX} %]", o(r.shimmer_local, 2));
-    let _ = writeln!(s, "➤ Shimmer (dB): {} dB   [norma < {SHIMMER_DB_MAX} dB]", o(r.shimmer_db, 3));
-    let _ = writeln!(s, "➤ HNR (harmoničnost): {} dB   [norma > {HNR_MIN} dB]", o(r.hnr_db, 1));
-    let _ = writeln!(s, "➤ Intenzitet (zvučni dio): {} dBFS", o(r.intensity_dbfs, 1));
-    let _ = writeln!(s, "➤ Broj analiziranih perioda: {}", r.periods);
-    s.push_str("\nVREMENSKI I PROZODIJSKI PARAMETRI:\n");
-    let _ = writeln!(s, "➤ Raspon F0 (5.–95. percentil): {} polutonova", o(r.f0_range_st, 1));
+    let _ = writeln!(s, "Trajanje odabira: {:.2} s · zvučni dio: {:.0} %", r.duration, r.voiced_fraction * 100.0);
+    s.push_str("\nVISINA (F0):\n");
+    let _ = writeln!(
+        s,
+        "➤ F0 srednja {} Hz · medijan {} Hz · SD {} Hz · raspon {}–{} Hz ({} polutonova, 5.–95. pct.)",
+        o(r.f0_mean, 1), o(r.f0_median, 1), o(r.f0_sd, 1), o(r.f0_min, 1), o(r.f0_max, 1), o(r.f0_range_st, 1)
+    );
+    s.push_str("\nPULSEVI I ZVUČNOST:\n");
+    let _ = writeln!(s, "➤ Pulsevi: {} · periode: {} · srednja perioda {} ms (SD {} ms)", r.pulses, r.periods, o(r.mean_period_ms, 3), o(r.sd_period_ms, 3));
+    let _ = writeln!(s, "➤ Udio lokalno bezvučnih okvira: {:.1} %", r.unvoiced_fraction);
+    let _ = writeln!(s, "➤ Prekidi zvučnosti: {} (stupanj {:.1} %)", r.voice_breaks, r.voice_break_degree);
+    s.push_str("\nJITTER:\n");
+    let _ = writeln!(s, "➤ Jitter (local): {} %   [norma < {JITTER_MAX} %]", o(r.jitter_local, 3));
+    let _ = writeln!(s, "➤ Jitter (local, abs): {} µs · RAP {} % · PPQ5 {} % · DDP {} %", o(r.jitter_abs_us, 1), o(r.jitter_rap, 3), o(r.jitter_ppq5, 3), o(r.jitter_ddp, 3));
+    s.push_str("\nSHIMMER:\n");
+    let _ = writeln!(s, "➤ Shimmer (local): {} %   [norma < {SHIMMER_MAX} %]", o(r.shimmer_local, 3));
+    let _ = writeln!(s, "➤ Shimmer (local, dB): {} dB   [norma < {SHIMMER_DB_MAX} dB]", o(r.shimmer_db, 3));
+    let _ = writeln!(s, "➤ APQ3 {} % · APQ5 {} % · APQ11 {} % · DDA {} %", o(r.shimmer_apq3, 3), o(r.shimmer_apq5, 3), o(r.shimmer_apq11, 3), o(r.shimmer_dda, 3));
+    s.push_str("\nHARMONIČNOST I SPEKTAR:\n");
+    let _ = writeln!(s, "➤ HNR: {} dB   [norma > {HNR_MIN} dB] · NHR {} · srednja autokorelacija {}", o(r.hnr_db, 2), o(r.nhr, 4), o(r.mean_autocorrelation, 4));
+    let _ = writeln!(s, "➤ CPPS: {} dB{}", o(r.cpps, 2), r.cpps_note.as_ref().map(|n| format!(" ({n})")).unwrap_or_default());
+    let _ = writeln!(s, "➤ Formanti (medijan, zvučni okviri): F1 {} · F2 {} · F3 {} · F4 {} Hz", o(r.formants[0], 0), o(r.formants[1], 0), o(r.formants[2], 0), o(r.formants[3], 0));
+    s.push_str("\nINTENZITET (Praat skala, nekalibrirano):\n");
+    let _ = writeln!(
+        s,
+        "➤ Srednji {} dB · min {} · maks {} · SD {} dB · zvučni dio {} dBFS",
+        o(r.intensity_mean_db, 1), o(r.intensity_min_db, 1), o(r.intensity_max_db, 1), o(r.intensity_sd_db, 1), o(r.intensity_dbfs, 1)
+    );
+    s.push_str("\nVREMENSKI PARAMETRI / TEČNOST:\n");
     let _ = writeln!(s, "➤ Najduža neprekinuta fonacija: {:.2} s", r.max_voiced_s);
-    let _ = writeln!(s, "➤ Prekidi zvučnosti: {} (udio {:.1} %)", r.voice_breaks, r.voice_break_degree);
     let _ = writeln!(s, "➤ Pauze ≥ 250 ms: {} (prosjek {:.2} s, {:.1} % trajanja)", r.pauses, r.pause_mean_s, r.pause_ratio);
     let _ = writeln!(
         s,
@@ -408,7 +398,7 @@ fn write_report(r: &mut VoiceReport) {
     let mut f = vec![];
     let mut bad = false;
     if r.voiced_fraction < 0.2 || r.f0_mean.is_none() {
-        f.push("Nije detektirana stabilna fonacija — radi li se o šaptu, tišini ili bezvučnim glasovima?".to_string());
+        f.push("Nije detektirana stabilna fonacija — radi li se o šaptu, tišini ili bezvučnim glasovima? Provjerite i raspon F0 u postavkama analize.".to_string());
         bad = true;
     } else {
         if let Some(m) = r.f0_mean {
@@ -445,9 +435,9 @@ fn write_report(r: &mut VoiceReport) {
     for x in &f {
         let _ = writeln!(s, "- {x}");
     }
-    s.push_str("\nNapomena: orijentacijski nalaz iz akustičkih mjera (algoritmi po uzoru na Praat/MDVP), \
-                nije medicinska dijagnoza. Za usporedive vrijednosti: produženi vokal /a/ 3–5 s, \
-                stalna udaljenost mikrofona, tiha prostorija.\n");
+    s.push_str("\nNapomena: mjere izračunate algoritmima Praata (P. Boersma i D. Weenink), provjereno \
+                podudaranje s Praatom 7. Orijentacijski nalaz, nije medicinska dijagnoza. Norme vrijede \
+                za produženi vokal /a/ 3–5 s, stalnu udaljenost mikrofona i tihu prostoriju.\n");
     r.normal = !bad && f.is_empty();
     r.findings = f;
     r.report = s;

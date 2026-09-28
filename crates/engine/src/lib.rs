@@ -4,6 +4,7 @@ pub mod audio;
 pub mod fft;
 pub mod graph;
 pub mod nodes;
+pub mod praat;
 pub mod record;
 pub mod templates;
 
