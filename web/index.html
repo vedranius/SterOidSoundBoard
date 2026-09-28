@@ -8,9 +8,9 @@
 </head>
 <body data-mode="music">
 <header>
-  <strong class="logo">SterOidSoundBoard</strong><span id="ver" class="dim"></span>
+  <strong class="logo"><span class="logo-mark" data-ic="waves"></span>SterOidSoundBoard</strong><span id="ver" class="dim small"></span>
   <div id="modes" class="seg">
-    <button data-mode="music" class="sel">Music</button><button data-mode="clinic">DigiLingua</button>
+    <button data-mode="music" class="sel"><span data-ic="music"></span>Music</button><button data-mode="clinic"><span data-ic="activity"></span>DigiLingua</button>
   </div>
   <div id="status" class="status">audio: —</div>
   <div class="meters-top">
@@ -19,9 +19,10 @@
     <span class="dim">DSP</span><span id="load">0%</span><span class="dim">xruns</span><span id="xruns">0</span>
   </div>
   <button id="btnMute" title="Silence the output (meters and recording keep working)">Mute</button>
-  <button id="btnPresets">Presets</button>
+  <button id="btnPresets"><span data-ic="bookmark"></span>Presets</button>
   <button id="btnAi" title="AI provider settings">AI</button>
-  <button id="btnAudio">Audio</button>
+  <button id="btnAudio"><span data-ic="settings"></span>Audio</button>
+  <button id="btnTheme" class="icon" title="Svijetla / tamna tema"><span data-ic="sun"></span></button>
 </header>
 
 <section id="audioPanel" class="panel hidden">
@@ -79,183 +80,239 @@
 </main>
 
 <main id="clinic" class="hidden" lang="hr">
-  <aside class="cl-side">
-    <div class="row"><h3 class="grow">Pacijenti <span id="clPCount" class="dim"></span></h3><button id="clNewP" class="pri small" title="Novi pacijent">+ Novi</button></div>
-    <input id="clSearch" type="search" placeholder="Traži ime, šifru, dijagnozu…" autocomplete="off">
-    <div id="clPList" class="cl-plist" role="listbox" aria-label="Pacijenti"></div>
-
+  <aside class="cl-clients" id="clClients">
+    <div class="row"><h3 class="grow"><span data-ic="users"></span>Klijenti <span id="clPCount" class="dim"></span></h3><button id="clNewP" class="pri small" title="Novi klijent"><span data-ic="plus"></span>Novi</button></div>
+    <div class="search"><span data-ic="search"></span><input id="clSearch" type="search" placeholder="Traži ime, šifru, dijagnozu…" autocomplete="off"></div>
+    <div id="clPList" class="cl-plist" role="listbox" aria-label="Klijenti"></div>
     <div id="clPCard" class="cl-pcard hidden">
-      <div class="row"><b id="clPName" class="grow"></b><button id="clEditP" class="small">Uredi</button></div>
+      <div class="row"><b id="clPName" class="grow"></b><button id="clEditP" class="small"><span data-ic="edit"></span>Uredi</button></div>
       <div id="clPSummary" class="cl-psum dim small"></div>
     </div>
-
-    <h3>Sesija</h3>
-    <div class="row"><span id="clSessState" class="dim">Nema aktivne sesije</span><span class="grow"></span><span id="clTimer" class="mono"></span></div>
-    <div id="clSessPreset" class="dim small"></div>
-    <button id="clSessBtn" class="pri wide">Započni sesiju</button>
-    <textarea id="clSessNotes" rows="3" placeholder="Bilješke sesije (spremaju se automatski)" class="hidden"></textarea>
-    <details id="clSessBox" open><summary>Povijest sesija <span id="clSessCount" class="dim"></span></summary><div id="clSessions" class="cl-list"></div></details>
-
-    <h3>Snimke <span id="clRecCount" class="dim"></span></h3>
-    <div id="clRecs" class="cl-list"></div>
   </aside>
 
   <section class="cl-main">
-    <div class="row cl-top">
-      <div class="seg" id="clTabs"><button data-tab="rehab" class="sel">Rehabilitacija</button><button data-tab="analiza">Analiza glasa</button><button data-tab="napredak">Napredak</button></div>
+    <div class="cl-head">
+      <button id="clClientsToggle" class="icon" title="Klijenti"><span data-ic="panel-left"></span></button>
+      <div class="cl-title"><div class="t"><span id="clPageIcon" data-ic="sliders"></span><span id="clPageTitle">Real-time audio</span></div><div class="s" id="clPageSub">Slušna povratna veza, EQ, DAF/FAF, šum</div></div>
+      <button class="client-chip" id="clChip" title="Odaberi klijenta"><span class="avatar" id="clChipAv">?</span><span id="clChipName">odaberite klijenta</span></button>
       <span id="clPresetBadge" class="badge hidden" title="Trenutni klinički preset"></span>
       <span class="grow"></span>
-      <button id="clHelpBtn" title="Tipkovnički prečaci">⌨</button>
-      <button id="clSettingsBtn" title="Postavke ustanove, analize i kalibracije">⚙ Postavke</button>
-      <button id="clAudioBtn" class="pri big" title="Pokreni / zaustavi zvuk (razmaknica)">▶ Pokreni zvuk</button>
+      <nav class="seg tabs" id="clTabs"><button data-tab="rehab" class="sel"><span data-ic="sliders"></span>Real-time audio</button><button data-tab="analiza"><span data-ic="activity"></span>Analiza glasa</button><button data-tab="napredak"><span data-ic="trending"></span>Napredak</button></nav>
+      <button id="clHelpBtn" class="icon" title="Tipkovnički prečaci (?)"><span data-ic="keyboard"></span></button>
+      <button id="clSettingsBtn" class="icon" title="Postavke ustanove, analize i kalibracije"><span data-ic="settings"></span></button>
+      <button id="clAudioBtn" class="pri" title="Pokreni / zaustavi zvuk (razmaknica)">▶ Pokreni audio</button>
+      <button id="clSideToggle" class="icon" title="Terapijska sesija i povijest"><span data-ic="panel-right"></span></button>
     </div>
     <div id="clMissing" class="banner hidden">
-      Trenutni board nema DigiLingua lanac (mikrofon → EQ → DAF → FAF → diskontinuitet → šum → uši).
-      <button id="clLoadChain" class="pri">Učitaj DigiLingua lanac</button>
+      <span data-ic="alert"></span>Trenutni board nema DigiLingua lanac (mikrofon → EQ → DAF → FAF → diskontinuitet → šum → uši).
+      <button id="clLoadChain" class="pri small">Učitaj DigiLingua lanac</button>
       <span class="dim small">Zamjenjuje trenutni board — spremite ga prije kao preset ako ga želite zadržati.</span>
     </div>
 
-    <div class="cl-status">
-      <div class="card2">
-        <div class="h row"><span>Ulaz — mikrofon</span><span class="grow"></span><button id="clDevRefresh" class="small" title="Osvježi popis uređaja (D)">⟳ Osvježi</button></div>
-        <select id="clIn" class="wide"></select>
-        <div class="row small dim cl-devrow"><label>Upravljački program <select id="clHost"></select></label><label class="chk"><input type="checkbox" id="clNoIn"> bez ulaza</label></div>
-      </div>
-      <div class="card2">
-        <div class="h">Izlaz — slušalice</div>
-        <select id="clOut" class="wide"></select>
-        <div class="row small dim cl-devrow"><label>Međuspremnik <select id="clBuf"><option value="">zadano</option><option>32</option><option>64</option><option>128</option><option>256</option><option>512</option><option>1024</option></select></label><span>manji = manja latencija</span></div>
-      </div>
-      <div class="card2 cl-astat">
-        <div class="h row"><span>Status zvuka</span><span class="grow"></span><span id="clLed" class="led"></span><b id="clLedTxt" class="small">Zaustavljeno</b></div>
-        <div class="kv small">
-          <span class="dim">Uzorkovanje</span><b id="clSr" class="mono">—</b>
-          <span class="dim">Međuspremnik</span><b id="clFrames" class="mono">—</b>
-          <span class="dim">Procj. latencija</span><b id="clLat" class="mono">—</b>
-          <span class="dim">DSP opterećenje</span><b id="clDsp" class="mono">—</b>
-          <span class="dim">Prekidi (xruns)</span><b id="clXr" class="mono">—</b>
+    <div class="cl-body">
+      <div class="cl-pages">
+        <!-- ================= Real-time audio -->
+        <div id="clRehab" class="page">
+          <div class="cl-status">
+            <div class="card2">
+              <div class="h row"><span data-ic="mic"></span><span class="grow">Ulazni uređaj</span><button id="clDevRefresh" class="icon small" title="Osvježi popis uređaja (D)"><span data-ic="refresh"></span></button></div>
+              <select id="clIn" class="wide"></select>
+              <div class="row small dim cl-devrow"><label>Upravljački program <select id="clHost"></select></label><label class="chk"><input type="checkbox" id="clNoIn"> bez ulaza</label></div>
+            </div>
+            <div class="card2">
+              <div class="h row"><span data-ic="headphones"></span><span class="grow">Izlazni uređaj</span></div>
+              <select id="clOut" class="wide"></select>
+              <div class="row small dim cl-devrow"><label>Međuspremnik <select id="clBuf"><option value="">zadano</option><option>32</option><option>64</option><option>128</option><option>256</option><option>512</option><option>1024</option></select></label><span>manji = manja latencija</span></div>
+            </div>
+            <div class="card2 cl-astat">
+              <div class="h row"><span class="grow">Status zvuka</span><span class="status-pill" id="clPill"><span id="clLed" class="led"></span><b id="clLedTxt">Zaustavljeno</b></span></div>
+              <div class="kv small">
+                <span class="dim">Uzorkovanje</span><b id="clSr" class="mono">—</b>
+                <span class="dim">Međuspremnik</span><b id="clFrames" class="mono">—</b>
+                <span class="dim">Procj. latencija</span><b id="clLat" class="mono">—</b>
+                <span class="dim">DSP opterećenje</span><b id="clDsp" class="mono">—</b>
+                <span class="dim">Prekidi (xruns)</span><b id="clXr" class="mono">—</b>
+              </div>
+              <div id="clAudioErr" class="err small"></div>
+            </div>
+          </div>
+          <div class="cl-live" id="rtLiveRow">
+            <div class="card2 cl-sono" id="clLiveCard">
+              <div class="h row"><span data-ic="waves"></span><span class="grow" id="clLiveTitle">Spektrogram u stvarnom vremenu</span>
+                <label class="small">Izvor <select id="clTap"><option value="0">mikrofon (suhi)</option><option value="1">izlaz (obrađeni)</option></select></label></div>
+              <div id="clSonoHost"></div>
+            </div>
+            <div class="card2 cl-vu">
+              <div class="h row"><span data-ic="gauge"></span><span class="grow">Razina (dBFS)</span></div>
+              <div class="vu2" id="clVu2">
+                <div class="vu-row" data-src="in"><b title="Mikrofon (ulaz)">Mik</b><div class="vu"><i></i><s></s></div><span class="mono db">—</span><span></span></div>
+                <div class="vu-row" data-src="outL"><b title="Lijevo uho (izlaz)">L</b><div class="vu"><i></i><s></s></div><span class="mono db">—</span><button class="small ear" data-ear="left">🔊</button></div>
+                <div class="vu-row" data-src="outR"><b title="Desno uho (izlaz)">D</b><div class="vu"><i></i><s></s></div><span class="mono db">—</span><button class="small ear" data-ear="right">🔊</button></div>
+              </div>
+              <div class="vu-scale mono"><span>-60</span><span>-48</span><span>-36</span><span>-24</span><span>-12</span><span>0</span></div>
+              <div class="dim small">Crta = vršna razina (zadržava 2 s). 🔊 utišava samo to uho.</div>
+              <div class="h" style="margin-top:14px">Signalni lanac</div>
+              <div id="clChain" class="chain"></div>
+              <div class="dim small">Klik na modul uključuje ili isključuje ga.</div>
+            </div>
+          </div>
+          <div class="card2">
+            <div class="h row"><span data-ic="bars"></span><span>31-pojasni ISO ekvilizator</span><span id="clEqVal" class="mono dim"></span>
+              <span class="grow"></span>
+              <div class="seg small-seg" id="clEqView"><button data-v="sliders" class="sel">Klizači</button><button data-v="curve">Krivulja</button></div>
+              <select id="clEqQuick" title="Brze krivulje"></select>
+              <button id="clEqReset" class="small" title="Vrati sve pojaseve na 0 dB (R)"><span data-ic="rotate"></span>Reset</button></div>
+            <div id="clEqSliders" class="eqs"></div>
+            <div id="clEqCurve" class="hidden"><svg id="clEq" viewBox="0 0 310 144" preserveAspectRatio="none"></svg><div id="clEqLabels" class="eq-labels mono"></div></div>
+            <div class="eq-legend small dim"><span><i class="g0"></i>Bas 20–125 Hz</span><span><i class="g1"></i>Niski srednji 160–630 Hz</span><span><i class="g2"></i>Srednji 800 Hz–3,15 kHz</span><span><i class="g3"></i>Visoki 4–20 kHz</span><span class="grow"></span><span>povucite preko stupaca za glatku krivulju · dvoklik = 0 dB · ↑↓ = ±0,5 dB</span></div>
+          </div>
+          <div class="cl-grid2">
+            <div class="card2 cl-presets">
+              <div class="h row"><span data-ic="bookmark"></span><span class="grow">Klinički preseti</span><button id="clPresetSave" class="small pri"><span data-ic="save"></span>Spremi kao novi</button></div>
+              <div id="clPresetList" class="plist"></div>
+            </div>
+            <div class="cl-grid" id="clModules"></div>
+          </div>
         </div>
-        <div id="clAudioErr" class="err small"></div>
-      </div>
-    </div>
 
-    <div class="cl-live">
-      <div class="card2 cl-sono">
-        <div class="h row"><span>Live sonagram</span><span class="grow"></span>
-          <label class="small">Izvor <select id="clTap"><option value="0">mikrofon (suhi)</option><option value="1">izlaz (obrađeni)</option></select></label></div>
-        <div id="clSonoHost"></div>
-      </div>
-      <div class="card2 cl-vu">
-        <div class="h row"><span>Razina (dBFS)</span><span class="grow"></span><span class="dim small">mikrofon · lijevo · desno uho</span></div>
-        <div class="vu2" id="clVu2">
-          <div class="vu-row" data-src="in"><b title="Mikrofon (ulaz)">Mik</b><div class="vu"><i></i><s></s></div><span class="mono db">—</span><span></span></div>
-          <div class="vu-row" data-src="outL"><b title="Lijevo uho (izlaz)">L</b><div class="vu"><i></i><s></s></div><span class="mono db">—</span><button class="small ear" data-ear="left">🔊</button></div>
-          <div class="vu-row" data-src="outR"><b title="Desno uho (izlaz)">D</b><div class="vu"><i></i><s></s></div><span class="mono db">—</span><button class="small ear" data-ear="right">🔊</button></div>
+        <!-- ================= Analiza glasa -->
+        <div id="clAnaliza" class="page hidden">
+          <div class="card2 cl-recbox">
+            <div class="h row"><span data-ic="mic"></span><span class="grow">Snimanje i učitavanje</span><label class="chk small"><input type="checkbox" id="clAutoMute" checked> utišaj slušalice dok je ovaj prikaz otvoren</label></div>
+            <div class="rec-row">
+              <label>Zadatak <select id="clRecTask"></select></label>
+              <label>Izvor <select id="clRecSrc"><option value="in">suhi mikrofon</option><option value="out">obrađeni izlaz</option></select></label>
+              <label class="grow">Oznaka <input id="clRecLabel" placeholder="npr. nakon 4. terapije"></label>
+              <button id="clRecBtn" class="rec"><span class="dot"></span><span id="clRecTxt">Snimi</span></button>
+              <button id="clUploadBtn"><span data-ic="upload"></span>Učitaj audio</button>
+              <input id="clUpload" type="file" accept="audio/*,.wav,.mp3,.m4a,.ogg,.flac,.webm" class="hidden">
+            </div>
+            <div id="anLiveSlot" class="an-live"></div>
+            <div id="clRecInfo" class="dim small">Za analizu glasa: produženi vokal /a/ 3–5 s, stalna udaljenost od mikrofona (npr. 30 cm), tiha prostorija. Za mucanje: čitanje i spontani govor ≥ 300 slogova. Učitajte i postojeće snimke (WAV za točnu analizu; MP3/M4A/OGG se pretvaraju).</div>
+          </div>
+
+          <div class="card2">
+            <div class="h row"><span data-ic="list"></span><span class="grow">Snimke klijenta <span id="clRecCount" class="dim"></span></span></div>
+            <div id="clRecTable" class="rtable"></div>
+          </div>
+
+          <div id="anArea" class="hidden">
+            <div class="card2 an-card" id="anCard">
+              <div class="an-head">
+                <div class="grow"><div class="an-title" id="anTitle">Analiza glasa</div><div class="dim small" id="anSubtitle"></div></div>
+                <div class="an-actions">
+                  <select id="anScope" title="Opseg analize"><option value="all">Cijela snimka</option><option value="sel">Odabir</option></select>
+                  <button id="anRunBtn" class="pri"><span data-ic="sparkles"></span>Analiziraj</button>
+                  <button id="anSaveAn" title="Spremi rezultat uz snimku i sesiju"><span data-ic="save"></span>Spremi analizu</button>
+                  <div class="menu"><button id="anExportBtn"><span data-ic="download"></span>Izvoz ▾</button>
+                    <div class="menu-list hidden" id="anExportMenu">
+                      <button data-x="csv">Mjere (CSV)</button><button data-x="praat">Voice report (tekst, Praat oblik)</button>
+                      <button data-x="pitch">Pitch listing (CSV)</button><button data-x="formant">Formant listing (CSV)</button>
+                      <button data-x="intensity">Intenzitet listing (CSV)</button><button data-x="pulses">Pulsevi (CSV)</button>
+                      <button data-x="png">Slika editora (PNG)</button><button data-x="txt">Nalaz (.txt)</button>
+                    </div></div>
+                  <a id="anWav" class="btn" title="Preuzmi WAV"><span data-ic="file-audio"></span>WAV</a>
+                  <a id="anTg" class="btn" title="Oznake kao Praat TextGrid"><span data-ic="layers"></span>TextGrid</a>
+                  <button id="anPrint" title="Ispis ili PDF nalaza"><span data-ic="printer"></span>Ispis / PDF</button>
+                  <button id="anMax" class="icon" title="Povećaj editor"><span data-ic="maximize"></span></button>
+                  <button id="anClose" class="icon" title="Zatvori snimku"><span data-ic="x"></span></button>
+                </div>
+              </div>
+              <div id="anEditor" class="an-editor"></div>
+              <div class="dim small an-hint">Povucite za odabir · kotačić = zum (Shift = pomak) · razmaknica = reprodukcija · A = oznaka · dvoklik na oznaku = uredi · Delete = obriši oznaku</div>
+            </div>
+            <div id="anTiles" class="tiles"></div>
+            <nav class="seg tabs an-tabs" id="anTabs">
+              <button data-t="mjere" class="sel"><span data-ic="table"></span>Mjere</button>
+              <button data-t="nalaz"><span data-ic="file"></span>Nalaz</button>
+              <button data-t="oznake"><span data-ic="tag"></span>Anotacija</button>
+              <button data-t="spremljene"><span data-ic="archive"></span>Spremljene analize <span id="anSavedN" class="dim"></span></button>
+              <button data-t="postavke"><span data-ic="settings"></span>Postavke prikaza</button>
+              <button data-t="ai"><span data-ic="sparkles"></span>AI mišljenje</button>
+            </nav>
+            <div class="an-tab" data-t="mjere">
+              <div class="card2"><div class="h row"><span class="grow">Mjere (Praat voice report)</span><span id="anSelInfo" class="mono dim small"></span></div><div id="anMeasures" class="mtable"></div></div>
+            </div>
+            <div class="an-tab hidden" data-t="nalaz">
+              <div class="card2 an-meta">
+                <label>Zadatak <select id="anTask"></select></label>
+                <label class="grow">Opažanja rehabilitatora za ovu snimku <textarea id="anNotes" rows="3" placeholder="npr. tvrdi počeci, blokovi na p/t/k, šumni glas nakon 30 s (bez imena i osobnih podataka)"></textarea></label>
+              </div>
+              <div class="card2"><div class="h row"><span class="grow">Klinički nalaz (akustička analiza)</span><button id="anCopy" class="small"><span data-ic="copy"></span>Kopiraj</button><button id="anSave" class="small"><span data-ic="download"></span>Spremi .txt</button></div>
+                <textarea id="anReport" readonly rows="18" class="mono"></textarea></div>
+            </div>
+            <div class="an-tab hidden" data-t="oznake">
+              <div class="card2"><div class="h row"><span class="grow">Netečnosti i oznake</span>
+                <label class="small">Slogova <input id="anSyl" type="number" min="0" max="1000000" class="num" title="Ručno prebrojani slogovi (0 = automatska procjena)"></label></div>
+                <div id="anSummary" class="small"></div><div id="anAnnList" class="rtable" style="margin-top:10px"></div></div>
+            </div>
+            <div class="an-tab hidden" data-t="spremljene">
+              <div class="card2"><div class="h">Spremljene analize ove snimke</div><div id="anSaved" class="rtable"></div>
+                <div class="dim small">„Spremi analizu” trajno bilježi odsječak, postavke i sve mjere — vidljivo i u povijesti sesije.</div></div>
+            </div>
+            <div class="an-tab hidden" data-t="postavke"><div class="card2" id="anSettingsHost"></div></div>
+            <div class="an-tab hidden" data-t="ai">
+              <div class="card2" id="anAi">
+                <div class="h row"><span class="grow">AI mišljenje</span><span id="anAiWho" class="dim"></span><button id="anAiCfg" class="small"><span data-ic="settings"></span>AI postavke</button></div>
+                <div id="anAiWarn" class="banner hidden"></div>
+                <textarea id="anAiQ" rows="2" placeholder="Dodatno pitanje ili fokus (neobavezno), npr. „Usporedi s prethodnom snimkom“ ili „Je li DAF prikladan?“" maxlength="4000"></textarea>
+                <div class="row" style="margin-top:8px">
+                  <label class="chk small"><input type="checkbox" id="anAiImg" checked> priloži sliku editora (sonagram + konture)</label>
+                  <span class="grow"></span>
+                  <button id="anAiPreview">Pregled podataka za AI</button>
+                  <button id="anAiRun" class="pri">Pokreni AI analizu</button>
+                </div>
+                <div id="anAiRunBox" class="ai-run hidden">
+                  <div class="row small"><span id="anAiState" class="mono grow"></span><button id="anAiStop" class="small danger">■ Zaustavi</button><button id="anAiLogToggle" class="small">Log</button></div>
+                  <pre id="anAiLog" class="ai-log"></pre>
+                </div>
+                <div class="dim small" style="margin-top:6px">AI ne čuje snimku: dobiva izmjerene parametre, profil pacijenta bez imena, šifre i datuma rođenja, vaša opažanja i (po izboru) sliku sonagrama. Mišljenje je pomoć rehabilitatoru, ne dijagnoza.</div>
+                <pre id="anAiPrompt" class="prompt hidden"></pre>
+                <div id="anAiOut" class="ai-out"></div>
+                <div id="anAiHist" class="row small"></div>
+              </div>
+            </div>
+          </div>
         </div>
-        <div class="vu-scale mono"><span>-60</span><span>-48</span><span>-36</span><span>-24</span><span>-12</span><span>0 dBFS</span></div>
-        <div class="dim small">Crta = vršna razina (zadržava 2 s). Gumb 🔊 utišava samo to uho.</div>
-        <div class="h" style="margin-top:12px">Signalni lanac</div>
-        <div id="clChain" class="chain"></div>
-        <div class="dim small">Klik na modul uključuje/isključuje ga.</div>
-      </div>
-    </div>
 
-    <div id="clRehab">
-      <div class="card2">
-        <div class="h row"><span>31-pojasni EQ (ISO 1/3 oktave)</span><span id="clEqVal" class="mono dim"></span>
-          <span class="grow"></span>
-          <div class="seg small-seg" id="clEqView"><button data-v="sliders" class="sel">Klizači</button><button data-v="curve">Krivulja</button></div>
-          <select id="clEqQuick" title="Brze krivulje"></select>
-          <button id="clEqReset" class="small" title="Vrati sve pojaseve na 0 dB (R)">↺ Reset</button></div>
-        <div id="clEqSliders" class="eqs"></div>
-        <div id="clEqCurve" class="hidden"><svg id="clEq" viewBox="0 0 310 144" preserveAspectRatio="none"></svg><div id="clEqLabels" class="eq-labels mono"></div></div>
-        <div class="eq-legend small dim"><span><i class="g0"></i>Bas 20–125 Hz</span><span><i class="g1"></i>Niski srednji 160–630 Hz</span><span><i class="g2"></i>Srednji 800 Hz–3,15 kHz</span><span><i class="g3"></i>Visoki 4–20 kHz</span><span class="grow"></span><span>dvoklik = 0 dB · strelice ↑↓ = ±0,5 dB</span></div>
-      </div>
-      <div class="cl-grid2">
-        <div class="card2 cl-presets">
-          <div class="h row"><span>Klinički preseti</span><span class="grow"></span><button id="clPresetSave" class="small pri">Spremi trenutno…</button></div>
-          <div id="clPresetList" class="plist"></div>
+        <!-- ================= Napredak -->
+        <div id="clNapredak" class="page hidden">
+          <div class="card2">
+            <div class="h row"><span data-ic="trending"></span><span class="grow">Napredak kroz vrijeme</span>
+              <label class="small">Zadatak <select id="prTask"></select></label>
+              <button id="prCsv" class="small"><span data-ic="download"></span>CSV</button><button id="prReload" class="icon small" title="Osvježi"><span data-ic="refresh"></span></button></div>
+            <div id="prInfo" class="dim small"></div>
+            <div id="prCharts" class="prcharts"></div>
+          </div>
+          <div class="card2"><div class="h">Tablica mjerenja (cijele snimke, klik otvara analizu)</div><div id="prTable" class="rtable"></div></div>
         </div>
-        <div class="cl-grid" id="clModules"></div>
       </div>
-    </div>
 
-    <div id="clAnaliza" class="hidden">
-      <div class="card2 cl-recbox">
-        <label class="chk"><input type="checkbox" id="clAutoMute" checked> Utišaj izlaz na ovom tabu (nema jeke)</label>
-        <div class="row">
-          <label>Zadatak <select id="clRecTask"></select></label>
-          <label>Izvor <select id="clRecSrc"><option value="in">suhi mikrofon</option><option value="out">obrađeni izlaz</option></select></label>
-          <label class="grow">Oznaka <input id="clRecLabel" placeholder="npr. nakon 4. terapije"></label>
+      <!-- ================= session sidebar -->
+      <aside class="cl-session" id="clSession">
+        <div class="card2">
+          <div class="side-title">Terapijska sesija</div>
+          <div class="sess-box">
+            <div class="kv small"><span class="dim"><span data-ic="user"></span>Klijent</span><b id="sbClient">—</b>
+              <span class="dim"><span data-ic="sliders"></span>Preset</span><b id="sbPreset">Nijedan odabran</b>
+              <span class="dim"><span data-ic="clock"></span>Status</span><b><span id="clSessState">Nema aktivne sesije</span> <span id="clTimer" class="mono"></span></b></div>
+          </div>
+          <button id="clSessBtn" class="pri wide">Započni sesiju</button>
+          <div id="clSessPreset" class="dim small"></div>
+          <label class="side-label">Bilješke sesije</label>
+          <textarea id="clSessNotes" rows="4" placeholder="Dodaj bilješke o ovoj terapijskoj sesiji…" disabled></textarea>
+          <div class="dim small">Bilješke se spremaju automatski.</div>
         </div>
-        <button id="clRecBtn" class="rec">ZAPOČNI SNIMANJE</button>
-        <div id="clRecInfo" class="dim small">Za analizu glasa: produženi vokal /a/ 3–5 s, stalna udaljenost od mikrofona (npr. 30 cm), tiha prostorija. Za mucanje: čitanje i spontani govor ≥ 300 slogova.</div>
-      </div>
-      <div class="card2">
-        <div class="h">Snimke pacijenta</div>
-        <div id="clRecTable" class="rtable"></div>
-      </div>
-    </div>
-
-    <div id="clNapredak" class="hidden">
-      <div class="card2">
-        <div class="h row"><span>Napredak kroz vrijeme</span><span class="grow"></span>
-          <label class="small">Zadatak <select id="prTask"></select></label>
-          <button id="prCsv" class="small">⬇ CSV</button><button id="prReload" class="small">⟳</button></div>
-        <div id="prInfo" class="dim small"></div>
-        <div id="prCharts" class="prcharts"></div>
-      </div>
-      <div class="card2"><div class="h">Tablica mjerenja (cijele snimke, klik otvara analizu)</div><div id="prTable" class="rtable"></div></div>
+        <div class="card2">
+          <div class="side-title">Povijest sesija</div>
+          <div class="dim small" id="sbHistName"></div>
+          <div class="row" style="margin:8px 0"><b class="grow small">Terapijske sesije</b><span class="badge" id="clSessCount">0</span></div>
+          <div id="clSessions" class="sess-list"></div>
+        </div>
+      </aside>
     </div>
   </section>
 </main>
-
-<div id="anModal" class="modal hidden" lang="hr">
-  <div class="modal-in an-in">
-    <div class="row an-head"><h2 id="anTitle" class="grow">Analiza glasa</h2>
-      <a id="anWav" class="btn small" title="Preuzmi WAV">⬇ WAV</a>
-      <a id="anTg" class="btn small" title="Oznake kao Praat TextGrid">⬇ TextGrid</a>
-      <button id="anPrint" class="small" title="Ispis ili PDF nalaza">🖶 Ispis / PDF</button>
-      <button id="anMax" class="small" title="Povećaj editor">⛶</button>
-      <button id="anClose" title="Zatvori (Esc)">✕</button></div>
-    <div id="anEditor" class="an-editor"></div>
-    <div class="dim small an-hint">Povucite mišem za odabir · kotačić = zum (Shift = pomak) · razmaknica = reproduciraj · A = oznaka · dvoklik na oznaku = uredi · Delete = obriši oznaku</div>
-    <div id="anTiles" class="tiles"></div>
-    <div class="an-grid">
-      <div class="card2"><div class="h row"><span>Mjere (Praat voice report)</span><span class="grow"></span><span id="anSelInfo" class="mono dim small"></span></div><div id="anMeasures" class="mtable"></div></div>
-      <div class="an-col">
-        <div class="card2 an-meta">
-          <label>Zadatak <select id="anTask"></select></label>
-          <label class="grow">Opažanja rehabilitatora za ovu snimku <textarea id="anNotes" rows="3" placeholder="npr. tvrdi počeci, blokovi na p/t/k, šumni glas nakon 30 s (bez imena i osobnih podataka)"></textarea></label>
-        </div>
-        <div class="card2"><div class="h row"><span>Netečnosti (oznake)</span><span class="grow"></span>
-          <label class="small">Slogova <input id="anSyl" type="number" min="0" max="1000000" class="num" title="Ručno prebrojani slogovi (0 = automatska procjena)"></label></div>
-          <div id="anSummary" class="small"></div></div>
-      </div>
-    </div>
-    <div class="card2"><div class="h row"><span>Klinički nalaz (akustička analiza)</span><span class="grow"></span><button id="anCopy" class="small">Kopiraj</button><button id="anSave" class="small">Spremi .txt</button></div>
-      <textarea id="anReport" readonly rows="16" class="mono"></textarea></div>
-    <div class="card2" id="anAi">
-      <div class="h row"><span>AI mišljenje</span><span id="anAiWho" class="dim"></span><span class="grow"></span><button id="anAiCfg" class="small">⚙ AI postavke</button></div>
-      <div id="anAiWarn" class="banner hidden"></div>
-      <textarea id="anAiQ" rows="2" placeholder="Dodatno pitanje ili fokus (neobavezno), npr. „Usporedi s prethodnom snimkom“ ili „Je li DAF prikladan?“" maxlength="4000"></textarea>
-      <div class="row" style="margin-top:8px">
-        <label class="chk small"><input type="checkbox" id="anAiImg" checked> priloži sliku editora (sonagram + konture)</label>
-        <span class="grow"></span>
-        <button id="anAiPreview">Pregled podataka za AI</button>
-        <button id="anAiRun" class="pri">Pokreni AI analizu</button>
-      </div>
-      <div id="anAiRunBox" class="ai-run hidden">
-        <div class="row small"><span id="anAiState" class="mono grow"></span><button id="anAiStop" class="small danger">■ Zaustavi</button><button id="anAiLogToggle" class="small">Log</button></div>
-        <pre id="anAiLog" class="ai-log"></pre>
-      </div>
-      <div class="dim small" style="margin-top:6px">AI ne čuje snimku: dobiva izmjerene parametre, profil pacijenta bez imena, šifre i datuma rođenja, vaša opažanja i (po izboru) sliku sonagrama. Mišljenje je pomoć rehabilitatoru, ne dijagnoza.</div>
-      <pre id="anAiPrompt" class="prompt hidden"></pre>
-      <div id="anAiOut" class="ai-out"></div>
-      <div id="anAiHist" class="row small"></div>
-    </div>
-  </div>
-</div>
 
 <div id="sModal" class="modal hidden" lang="hr">
   <div class="modal-in card2 sdlg">
@@ -335,6 +392,7 @@
 </div>
 
 <div id="toast"></div>
+<script src="icons.js"></script>
 <script src="app.js"></script>
 <script src="sono.js"></script>
 <script src="editor.js"></script>

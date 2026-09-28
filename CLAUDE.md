@@ -39,9 +39,11 @@ DigiLingua UI text is Croatian; Music UI is English.
   AI runs as background tasks in `state.rs` (`ai_tasks`, log/delta/stats/end WS events with
   positions `n`/`at`, cancel), `server.rs` axum REST + WS.
 - `web/` vanilla JS UI, embedded with rust-embed: `app.js` core + pedalboard (HOOKS, setParam,
-  setBypass shared by views), `sono.js` colour maps/axes/legend + LiveSono widget, `editor.js`
-  Praat-style SoundEditor, `clinic.js` DigiLingua workstation (patients, sessions, presets, devices,
-  EQ, analysis modal, progress, settings, print report).
+  setBypass shared by views, light/dark theme), `icons.js` inline icon set (`data-ic`), `sono.js`
+  colour maps/axes/legend + theme palette (`Sono.pal()` from CSS `--cv-*`) + LiveSono (live wave +
+  spectrogram), `editor.js` Praat-style SoundEditor (+ inline `settingsForm`), `clinic.js` DigiLingua
+  workstation laid out like the DigiLingua web app: clients list, pages Real-time / Analiza glasa /
+  Napredak, session sidebar with history, analysis page (record/upload, saved analyses, exports).
 - `packaging/linux/` systemd unit + RPi install script. `.github/workflows/build.yml` CI + releases on `v*` tags.
 
 ## Conventions
@@ -61,10 +63,12 @@ with legend, DigiLingua workstation (patient list, clinical presets, devices/sta
 chain, per-ear mute, sessions detail/apply, progress charts/CSV, clinic settings + SPL calibration,
 print/PDF report).
 v0.4.1 Ollama built in (model manager, pull with progress, GPU/CPU share), live AI log + streaming + stop.
-No auth yet (patient data + AI key on LAN!) — PIN/login is top priority in 0.5.
+v0.5.0 DigiLingua-style professional UI (light default), analysis page, audio upload, saved analyses,
+Praat listings/voice-report export, more spectrogram/pitch/formant display options, live waveform.
+No auth yet (patient data + AI key on LAN!) — PIN/login is top priority in 0.6.
 Tags can't be pushed from Claude's cloud sessions (git proxy): Vedran pushes `vX.Y.Z` himself.
 
-## Next: v0.5.0
+## Next: v0.6.0
 0. PIN/login (patient data on LAN), optional per-clinic data dir.
 1. Verify CI green on all 3 targets; fix whatever breaks (Windows first).
 2. Windows ASIO (cpal `asio` feature; ASIO SDK in CI, check its license) + WASAPI exclusive option.

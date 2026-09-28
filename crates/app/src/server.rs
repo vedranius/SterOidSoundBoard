@@ -54,6 +54,9 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/recordings/{id}/analyze", post(analyze))
         .route("/api/recordings/{id}/tracks", post(tracks))
         .route("/api/recordings/{id}/textgrid", get(textgrid))
+        .route("/api/recordings/upload", post(upload_recording).layer(DefaultBodyLimit::max(512 << 20)))
+        .route("/api/recordings/{id}/analyses", post(save_analysis))
+        .route("/api/recordings/{id}/analyses/{aid}", delete(delete_analysis))
         .route("/api/recordings/{id}/summary", get(annotation_summary))
         .route("/api/patients/{id}/progress", get(progress))
         .route("/api/sessions/{id}/detail", get(session_detail))
@@ -425,6 +428,48 @@ async fn update_recording(State(app): S, Path(id): Path<String>, Json(e): Json<R
         r.syllables = (n > 0).then_some(n.min(1_000_000));
     }
     done(app.save_clinic(&c))
+}
+
+#[derive(Deserialize)]
+struct UploadQuery {
+    patient: Option<String>,
+    #[serde(default)]
+    task: String,
+    #[serde(default)]
+    label: String,
+}
+
+/// Raw WAV bytes in the body (the browser converts other formats first).
+async fn upload_recording(State(app): S, Query(q): Query<UploadQuery>, body: axum::body::Bytes) -> Response {
+    let task: String = q.task.chars().take(200).collect();
+    let label: String = q.label.chars().take(200).collect();
+    match tokio::task::spawn_blocking(move || app.import_recording(q.patient.filter(|p| !p.is_empty()), task, label, &body)).await {
+        Ok(Ok(r)) => Json(r).into_response(),
+        Ok(Err(e)) => err(e),
+        Err(e) => err(e),
+    }
+}
+
+#[derive(Deserialize)]
+struct SaveAnalysisIn {
+    start: f32,
+    end: f32,
+    settings: Option<steroid_engine::analysis::AnalysisSettings>,
+    #[serde(default)]
+    label: String,
+}
+
+async fn save_analysis(State(app): S, Path(id): Path<String>, Json(b): Json<SaveAnalysisIn>) -> Response {
+    let label: String = b.label.chars().take(200).collect();
+    match tokio::task::spawn_blocking(move || app.save_analysis(&id, b.start, b.end, b.settings, label)).await {
+        Ok(Ok(a)) => Json(a).into_response(),
+        Ok(Err(e)) => err(e),
+        Err(e) => err(e),
+    }
+}
+
+async fn delete_analysis(State(app): S, Path((id, aid)): Path<(String, String)>) -> Response {
+    done(app.delete_analysis(&id, &aid))
 }
 
 async fn textgrid(State(app): S, Path(id): Path<String>) -> Response {

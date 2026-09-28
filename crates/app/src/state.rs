@@ -522,6 +522,7 @@ impl App {
             notes: String::new(),
             annotations: vec![],
             syllables: None,
+            analyses: vec![],
         };
         let path = clinic::wav_path(&self.paths.recordings, &meta.id);
         match Recorder::start(cons, &path, meta.sample_rate, src, self.stats.clone()) {
@@ -552,6 +553,81 @@ impl App {
         c.recordings.push(meta.clone());
         self.save_clinic(&c)?;
         Ok(meta)
+    }
+
+    /// Store an uploaded WAV file as a recording (validated by decoding it).
+    pub fn import_recording(&self, patient_id: Option<String>, task: String, label: String, bytes: &[u8]) -> Result<Recording> {
+        let session_id = {
+            let c = self.clinic.lock().unwrap();
+            if let Some(p) = &patient_id {
+                if !c.patients.iter().any(|x| &x.id == p) {
+                    return Err(anyhow!("no such patient"));
+                }
+            }
+            c.active_session().filter(|s| Some(&s.patient_id) == patient_id.as_ref()).map(|s| s.id.clone())
+        };
+        let id = clinic::new_id("r");
+        let path = clinic::wav_path(&self.paths.recordings, &id);
+        std::fs::write(&path, bytes)?;
+        let (x, sr) = match record::load_mono(&path) {
+            Ok(v) => v,
+            Err(e) => {
+                let _ = std::fs::remove_file(&path);
+                return Err(anyhow!("datoteka nije ispravan WAV: {e}"));
+            }
+        };
+        if x.is_empty() || sr < 8000 {
+            let _ = std::fs::remove_file(&path);
+            return Err(anyhow!("snimka je prazna ili ima prenisku frekvenciju uzorkovanja ({sr} Hz)"));
+        }
+        let meta = Recording {
+            id,
+            patient_id,
+            session_id,
+            label,
+            created: clinic::now_ms(),
+            duration: x.len() as f32 / sr as f32,
+            sample_rate: sr,
+            source: "upload".into(),
+            task,
+            notes: String::new(),
+            annotations: vec![],
+            syllables: None,
+            analyses: vec![],
+        };
+        let mut c = self.clinic.lock().unwrap();
+        c.recordings.push(meta.clone());
+        self.save_clinic(&c)?;
+        Ok(meta)
+    }
+
+    /// Analyse a selection and keep the result with the recording.
+    pub fn save_analysis(&self, id: &str, start: f32, end: f32, settings: Option<AnalysisSettings>, label: String) -> Result<clinic::SavedAnalysis> {
+        let rep = self.analyze(id, Some(start), Some(end), settings)?;
+        let mut report = serde_json::to_value(&rep)?;
+        if let Some(o) = report.as_object_mut() {
+            o.remove("pitch");
+        }
+        let a = clinic::SavedAnalysis { id: clinic::new_id("v"), created: clinic::now_ms(), start, end, label, report };
+        let mut c = self.clinic.lock().unwrap();
+        let r = c.recordings.iter_mut().find(|r| r.id == id).ok_or_else(|| anyhow!("no such recording"))?;
+        if r.analyses.len() >= 200 {
+            return Err(anyhow!("previše spremljenih analiza za ovu snimku"));
+        }
+        r.analyses.push(a.clone());
+        self.save_clinic(&c)?;
+        Ok(a)
+    }
+
+    pub fn delete_analysis(&self, rec: &str, id: &str) -> Result<()> {
+        let mut c = self.clinic.lock().unwrap();
+        let r = c.recordings.iter_mut().find(|r| r.id == rec).ok_or_else(|| anyhow!("no such recording"))?;
+        let n = r.analyses.len();
+        r.analyses.retain(|a| a.id != id);
+        if r.analyses.len() == n {
+            return Err(anyhow!("nema te analize"));
+        }
+        self.save_clinic(&c)
     }
 
     pub fn delete_recording(&self, id: &str) -> Result<()> {
@@ -950,7 +1026,8 @@ impl App {
                 let frames: Vec<serde_json::Value> = analyzer
                     .frames()
                     .into_iter()
-                    .map(|f| json!({"s": base64::engine::general_purpose::STANDARD.encode(&f.spec), "f0": (f.f0 * 10.0).round() / 10.0, "db": (f.db * 10.0).round() / 10.0}))
+                    .map(|f| json!({"s": base64::engine::general_purpose::STANDARD.encode(&f.spec), "f0": (f.f0 * 10.0).round() / 10.0, "db": (f.db * 10.0).round() / 10.0,
+                                 "lo": (f.lo * 1000.0).round() / 1000.0, "hi": (f.hi * 1000.0).round() / 1000.0}))
                     .collect();
                 live = json!({"df": df, "n": nb, "hop": analyzer.hop_seconds(), "win": analyzer.window(),
                               "db_min": SPEC_DB_MIN, "db_step": SPEC_DB_STEP, "frames": frames});

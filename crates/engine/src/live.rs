@@ -26,6 +26,9 @@ pub struct LiveFrame {
     pub f0: f32,
     /// Intensity, Praat dB scale (sample 1.0 = 1 Pa).
     pub db: f32,
+    /// Lowest and highest sample of this 10 ms hop (live waveform).
+    pub lo: f32,
+    pub hi: f32,
 }
 
 pub struct LiveAnalyzer {
@@ -147,6 +150,9 @@ impl LiveAnalyzer {
     }
 
     fn frame(&mut self, back: usize, buf: &mut Vec<f32>) -> LiveFrame {
+        // --- waveform envelope of the newest hop
+        self.last(self.hop as usize, back, buf);
+        let (lo, hi) = buf.iter().fold((0f32, 0f32), |(a, b), &v| (a.min(v), b.max(v)));
         // --- spectrum
         let n = self.spec_win.len();
         self.last(n, back, buf);
@@ -211,7 +217,7 @@ impl LiveAnalyzer {
                 }
             }
         }
-        LiveFrame { spec, f0, db }
+        LiveFrame { spec, f0, db, lo, hi }
     }
 }
 

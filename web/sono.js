@@ -8,8 +8,10 @@ const Sono = (() => {
     toplo: [[0, [0, 0, 4]], [0.25, [66, 10, 104]], [0.5, [147, 38, 103]], [0.75, [221, 81, 58]], [0.9, [252, 165, 10]], [1, [252, 255, 164]]],
     viridis: [[0, [68, 1, 84]], [0.25, [59, 82, 139]], [0.5, [33, 145, 140]], [0.75, [94, 201, 98]], [1, [253, 231, 37]]],
     plavo: [[0, [0, 0, 0]], [0.45, [20, 60, 140]], [0.8, [77, 163, 255]], [1, [230, 245, 255]]],
+    plavozuto: [[0, [10, 18, 64]], [0.4, [24, 96, 196]], [0.7, [96, 196, 214]], [1, [255, 236, 110]]],
+    crno: [[0, [0, 0, 0]], [1, [255, 255, 255]]],
   };
-  const NAMES = { praat: "Praat (sivo)", toplo: "Toplo (inferno)", viridis: "Viridis", plavo: "Plavo" };
+  const NAMES = { praat: "Praat (sivo, bijela podloga)", crno: "Sivo (crna podloga)", plavozuto: "Plavo-žuto", toplo: "Toplo (inferno)", viridis: "Viridis", plavo: "Plavo" };
   const LUTS = {};
   function lut(name) {
     if (LUTS[name]) return LUTS[name];
@@ -21,6 +23,19 @@ const Sono = (() => {
       for (let c = 0; c < 3; c++) out[i * 3 + c] = ca[c] + (cb[c] - ca[c]) * Math.max(0, Math.min(1, f));
     }
     return (LUTS[name] = out);
+  }
+
+  // ------------------------------------------------------------ theme colours (CSS --cv-* tokens)
+  let palCache = null, palKey = "";
+  function pal() {
+    const key = document.documentElement.dataset.theme || "";
+    if (palCache && key === palKey) return palCache;
+    const cs = getComputedStyle(document.documentElement), v = (n, d) => (cs.getPropertyValue(n).trim() || d);
+    palKey = key;
+    palCache = { bg: v("--cv-bg", "#fff"), lane: v("--cv-lane", "#fafbfc"), waveBg: v("--cv-wave-bg", "#0f141b"), wave: v("--cv-wave", "#5fb0ff"),
+      text: v("--cv-text", "#475467"), grid: v("--cv-grid", "#d0d5dd"), tier: v("--cv-tier", "#f2f4f7"), sel: v("--cv-sel", "rgba(28,93,168,.14)"),
+      acc: v("--acc", "#1c5da8"), cross: key === "dark" ? "rgba(255,255,255,.35)" : "rgba(16,24,40,.35)" };
+    return palCache;
   }
 
   // ------------------------------------------------------------ axes
@@ -46,8 +61,9 @@ const Sono = (() => {
       g.fillStyle = `rgb(${L[v * 3]},${L[v * 3 + 1]},${L[v * 3 + 2]})`;
       g.fillRect(x, y + i, w, 1);
     }
-    g.strokeStyle = "#555"; g.lineWidth = 1; g.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
-    g.fillStyle = "#9aa4b1"; g.font = `${10 * dpr}px system-ui`; g.textBaseline = "middle";
+    const C = pal();
+    g.strokeStyle = C.grid; g.lineWidth = 1; g.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+    g.fillStyle = C.text; g.font = `${10 * dpr}px system-ui`; g.textBaseline = "middle";
     for (const d of ticks(dbMin, dbMax, 5)) {
       const yy = y + (1 - (d - dbMin) / (dbMax - dbMin)) * h;
       g.fillRect(x + w, yy, 3 * dpr, 1);
@@ -91,7 +107,7 @@ const Sono = (() => {
   class LiveSono {
     constructor(host, opts = {}) {
       this.opts = opts;
-      this.set = Object.assign({ fmax: 5000, win: 0.005, dyn: 70, auto: true, maxDb: -20, map: "toplo", secs: 8, f0: true, db: false, f0max: 500 },
+      this.set = Object.assign({ fmax: 5000, win: 0.005, dyn: 70, auto: true, maxDb: -20, map: "toplo", secs: 8, f0: true, db: false, f0max: 500, wave: true },
         (() => { try { return JSON.parse(localStorage.getItem("ssb.sono") || "{}"); } catch (_) { return {}; } })());
       this.frames = []; // {spec: Uint8Array, f0, db}
       this.meta = null; this.paused = false; this.hover = null; this.recentMax = 0;
@@ -105,6 +121,7 @@ const Sono = (() => {
           <label>Maks <input data-k="maxDb" type="range" min="-80" max="10" step="1"><span class="mono" data-v="maxDb"></span></label>
           <label>Boje <select data-k="map">${Object.entries(NAMES).map(([k, n]) => `<option value="${k}">${n}</option>`).join("")}</select></label>
           <label>Prikaz <select data-k="secs"><option value="4">4 s</option><option value="8">8 s</option><option value="15">15 s</option><option value="30">30 s</option></select></label>
+          <label class="chk"><input data-k="wave" type="checkbox"> valni oblik</label>
           <label class="chk f0c"><input data-k="f0" type="checkbox"> F0</label>
           <label class="chk dbc"><input data-k="db" type="checkbox"> intenzitet</label>
           <span class="grow"></span>
@@ -154,9 +171,10 @@ const Sono = (() => {
       this.cv.width = Math.max(200, box.clientWidth * dpr); this.cv.height = Math.max(120, box.clientHeight * dpr);
       this.full();
     }
-    plot() { // plot rectangle inside the canvas (device px)
-      const d = this.dpr || 1;
-      return { x: 44 * d, y: 8 * d, w: this.cv.width - (44 + 88) * d, h: this.cv.height - (8 + 20) * d };
+    plot() { // spectrogram rectangle inside the canvas (device px); the waveform lane sits above it
+      const d = this.dpr || 1, top = 8 * d, full = this.cv.height - (8 + 20) * d;
+      const wh = this.set.wave ? Math.round(full * 0.24) : 0, gap = wh ? 6 * d : 0;
+      return { x: 44 * d, y: top + wh + gap, w: this.cv.width - (44 + 88) * d, h: full - wh - gap, wy: top, wh };
     }
     push(live) {
       if (!live || !live.frames) return;
@@ -167,7 +185,7 @@ const Sono = (() => {
         for (let i = 0; i < bin.length; i++) a[i] = bin.charCodeAt(i);
         let m = 0; for (let i = 2; i < a.length; i++) if (a[i] > m) m = a[i];
         this.recentMax = Math.max(m, this.recentMax * 0.995);
-        this.frames.push({ spec: a, f0: f.f0, db: f.db, max: m });
+        this.frames.push({ spec: a, f0: f.f0, db: f.db, max: m, lo: f.lo || 0, hi: f.hi || 0 });
       }
       const keep = Math.ceil(30 / (live.hop || 0.01)) + 10;
       if (this.frames.length > keep) this.frames.splice(0, this.frames.length - keep);
@@ -212,10 +230,11 @@ const Sono = (() => {
     }
     compose() {
       const g = this.cv.getContext("2d"), d = this.dpr || 1, P = this.plot();
-      g.fillStyle = "#0b0d10"; g.fillRect(0, 0, this.cv.width, this.cv.height);
+      const C = pal();
+      g.fillStyle = C.bg; g.fillRect(0, 0, this.cv.width, this.cv.height);
       if (this.off.width) { g.imageSmoothingEnabled = false; g.drawImage(this.off, P.x, P.y, P.w, P.h); }
-      g.strokeStyle = "#39414b"; g.strokeRect(P.x - 0.5, P.y - 0.5, P.w + 1, P.h + 1);
-      g.font = `${10 * d}px system-ui`; g.fillStyle = "#9aa4b1";
+      g.strokeStyle = C.grid; g.strokeRect(P.x - 0.5, P.y - 0.5, P.w + 1, P.h + 1);
+      g.font = `${10 * d}px system-ui`; g.fillStyle = C.text;
       // frequency axis
       g.textAlign = "right"; g.textBaseline = "middle";
       for (const f of ticks(0, this.set.fmax, 6)) { const y = P.y + (1 - f / this.set.fmax) * P.h; g.fillRect(P.x - 4 * d, y, 4 * d, 1); g.fillText(fmtHz(f), P.x - 6 * d, y); }
@@ -225,6 +244,15 @@ const Sono = (() => {
       for (const s of ticks(0, this.set.secs, 8)) { const x = P.x + P.w - (s / this.set.secs) * P.w; g.fillRect(x, P.y + P.h, 1, 4 * d); g.fillText(s ? `−${s}s` : "sada", x, P.y + P.h + 5 * d); }
       // overlays
       const n = this.nCols(), fr = this.frames.slice(-n), off = n - fr.length, xw = P.w / n;
+      if (P.wh) { // live waveform envelope (min/max per 10 ms), auto-scaled to the visible peak
+        g.fillStyle = C.waveBg; g.fillRect(P.x, P.wy, P.w, P.wh);
+        let pk = 0.02; for (const f of fr) pk = Math.max(pk, -f.lo, f.hi);
+        const mid = P.wy + P.wh / 2, sc = (P.wh / 2 - 2) / pk;
+        g.fillStyle = C.wave;
+        fr.forEach((f, i) => { const x = P.x + (off + i) * xw; g.fillRect(x, mid - f.hi * sc, Math.max(1, xw), Math.max(1, (f.hi - f.lo) * sc)); });
+        g.fillStyle = C.text; g.textAlign = "right"; g.textBaseline = "middle";
+        g.fillText(pk.toFixed(pk < 0.1 ? 3 : 2), P.x - 4 * d, P.wy + 6 * d); g.fillText("0", P.x - 4 * d, mid);
+      }
       if (this.set.db) this.curve(g, fr, off, xw, P, (f) => f.db, 30, 100, "#ffd84d");
       if (this.set.f0) this.dots(g, fr, off, xw, P, "#4dd2ff");
       // right side: F0 scale + colour bar
@@ -232,7 +260,7 @@ const Sono = (() => {
       if (this.set.f0) { g.fillStyle = "#4dd2ff"; for (const f of ticks(0, this.set.f0max, 5)) { const y = P.y + (1 - f / this.set.f0max) * P.h; g.fillRect(P.x + P.w, y, 4 * d, 1); g.fillText(f + "", P.x + P.w + 5 * d, y); } }
       const [lo, hi] = this.levels();
       colorbar(g, P.x + P.w + 42 * d, P.y + 12 * d, 10 * d, P.h - 12 * d, this.set.map, lo, hi, d, "dB");
-      if (this.hover) { g.strokeStyle = "#fff8"; g.beginPath(); g.moveTo(this.hover.px, P.y); g.lineTo(this.hover.px, P.y + P.h); g.moveTo(P.x, this.hover.py); g.lineTo(P.x + P.w, this.hover.py); g.stroke(); }
+      if (this.hover) { g.strokeStyle = C.cross; g.beginPath(); g.moveTo(this.hover.px, P.y); g.lineTo(this.hover.px, P.y + P.h); g.moveTo(P.x, this.hover.py); g.lineTo(P.x + P.w, this.hover.py); g.stroke(); }
       this.drawInfo();
     }
     dots(g, fr, off, xw, P, color) {
@@ -258,10 +286,10 @@ const Sono = (() => {
     drawInfo() {
       const last = this.frames[this.frames.length - 1];
       const now = this.root.querySelector('[data-i="now"]'), hv = this.root.querySelector('[data-i="hover"]');
-      now.innerHTML = last ? `F0 <b>${last.f0 > 0 ? last.f0.toFixed(1) + " Hz" : "—"}</b> · intenzitet <b>${last.db > 0 ? last.db.toFixed(1) + " dB" : "—"}</b>${this.paused ? ' · <span class="warnc">ZAMRZNUTO</span>' : ""}` : "čekam signal…";
+      now.innerHTML = last ? `F0 <b>${last.f0 > 0 ? last.f0.toFixed(1) + " Hz" : "—"}</b> · intenzitet <b>${last.db > 0 ? last.db.toFixed(1) + " dB" : "—"}</b> <span class="dim" title="Uživo: jedan okvir od 10 ms, za praćenje. Mjere za nalaz računa Praat-kompatibilna analiza snimke.">(uživo, orijentacijski)</span>${this.paused ? ' · <span class="warnc">ZAMRZNUTO</span>' : ""}` : "čekam signal…";
       const h = this.hover;
       hv.textContent = h ? `−${h.ago.toFixed(2)} s · ${h.f.toFixed(0)} Hz · ${h.db != null ? h.db.toFixed(1) + " dB" : ""}${h.frame && h.frame.f0 > 0 ? " · F0 " + h.frame.f0.toFixed(1) + " Hz" : ""}` : "";
     }
   }
-  return { lut, ticks, fmtHz, colorbar, fft, gaussWindow, LiveSono, MAPS: NAMES };
+  return { lut, ticks, fmtHz, colorbar, fft, gaussWindow, pal, LiveSono, MAPS: NAMES };
 })();

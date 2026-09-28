@@ -2,6 +2,39 @@
 
 All notable changes are documented here. Versioning: [SemVer](https://semver.org).
 
+## [0.5.0] - 2026-09-28
+
+DigiLingua redesigned after the DigiLingua web app: a clean, professional **light theme** (dark
+theme one click away), the same page structure and workflow, and more Praat analysis options.
+
+### Added
+- **Layout like DigiLingua**: page header with the client, pages **Real-time audio**, **Analiza glasa**
+  and **Napredak**, a collapsible **Klijenti** list on the left and a **Terapijska sesija** sidebar on
+  the right (client, preset, status and timer, start/stop, auto-saved notes) with **Povijest sesija**
+  cards: date, type (Analiza glasa / Real-time), duration and time, recordings (open, download) and
+  **Glasovne analize** with F0, HNR, jitter, shimmer, CPPS. Side panels become drawers on tablets/phones.
+- **Analysis as a page** (not a pop-up): record or **upload audio** (WAV kept bit-exact; MP3, M4A,
+  OGG, FLAC… converted in the browser), the recording opens straight in the editor. **Live waveform
+  above the live spectrogram** while recording (min/max per 10 ms from the engine).
+- Analysis toolbar: whole recording / selection, Analiziraj, **Spremi analizu** (keeps selection,
+  settings and every measure with the recording and session), **Izvoz**: measures CSV, **Praat-format
+  voice report**, pitch / formant / intensity / pulse listings (CSV), editor PNG, report text; WAV,
+  TextGrid, print/PDF, full-screen editor. Tabs: Mjere, Nalaz, Anotacija (table of labels: jump,
+  edit, delete), Spremljene analize, Postavke prikaza, AI mišljenje.
+- **More Praat display options**: Gaussian (Praat) or Hann window, window length 3–50 ms,
+  **dynamic compression**, pre-emphasis, dynamic range, colour maps (Praat grey, grey on black,
+  blue-yellow, warm, viridis, blue); pitch in **Hz or semitones**, as a line or speckles; formants:
+  number shown, **bandwidth filter**, dot size; intensity range; CPPS on/off — as an inline settings
+  panel with male/female/child presets.
+- Real-time page: **Stereo volume** card (input gain before the EQ, output gain after the EQ, left
+  and right ear, linked), EQ with **click-and-drag across the bands** (smooth curves, interpolated),
+  colour-coded frequency groups, switch-style module toggles, status pill, preset "Spremi kao novi".
+- Consistent icon set (offline), refined typography, spacing and tables; theme-aware canvases.
+
+### Changed
+- Live F0/intensity are labelled "uživo, orijentacijski"; all measures for reports come from the
+  Praat-compatible analysis of the recording (uploaded WAVs give exactly Praat's values).
+
 ## [0.4.1] - 2026-09-28
 
 Local AI with **Ollama built in** and a **live AI log**, so you can see what the AI is doing.

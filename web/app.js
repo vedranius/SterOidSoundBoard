@@ -275,6 +275,16 @@ function setMode(mode) {
 }
 document.querySelectorAll("#modes button").forEach((b) => (b.onclick = () => setMode(b.dataset.mode)));
 
+// ---------------------------------------------------------------- theme (light default)
+function setTheme(t) {
+  document.documentElement.dataset.theme = t;
+  const b = $("#btnTheme"); if (b) { b.innerHTML = `<span data-ic="${t === "dark" ? "sun" : "moon"}"></span>`; if (window.Icons) Icons.apply(b); }
+  try { localStorage.setItem("ssb.theme", t); } catch (_) {}
+  emitHooks({ t: "theme", theme: t });
+}
+$("#btnTheme").onclick = () => setTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark");
+setTheme((() => { try { return localStorage.getItem("ssb.theme") || "light"; } catch (_) { return "light"; } })());
+
 // ---------------------------------------------------------------- boot
 (async () => {
   (await api("GET", "/api/node-types")).forEach((t) => (TYPES[t.kind] = t));

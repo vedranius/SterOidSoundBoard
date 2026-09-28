@@ -98,6 +98,7 @@ $("#clPList").addEventListener("keydown", (e) => {
   if (n && n.classList.contains("pitem")) n.focus(); else if (e.key === "ArrowUp") $("#clSearch").focus();
 });
 async function selectPatient(id) {
+  $("#clClients").classList.remove("open");
   st.patient = st.patients.find((p) => p.id === id) || null;
   lsSet("ssb.patient", st.patient ? st.patient.id : "");
   renderPList();
@@ -143,6 +144,10 @@ $("#clPDel").onclick = async () => {
 function renderPCard() {
   const p = st.patient;
   $("#clPCard").classList.toggle("hidden", !p);
+  $("#clChipAv").textContent = p ? initials(p.name) : "?";
+  $("#clChipName").textContent = p ? p.name : "odaberite klijenta";
+  $("#sbClient").textContent = p ? p.name : "—";
+  $("#sbHistName").textContent = p ? p.name + (p.code ? ` · ${p.code}` : "") : "Odaberite klijenta za povijest sesija.";
   if (!p) return;
   $("#clPName").textContent = p.name + (p.code ? ` (${p.code})` : "");
   const age = ageOf(p.birth);
@@ -163,29 +168,44 @@ async function loadPatientData() {
   if (st.tab === "napredak") loadProgress();
 }
 
-// ============================================================ sessions
+// ============================================================ sessions (sidebar: current session + history)
 let timerH = 0;
+const fmtClock = (ms) => new Date(ms).toLocaleTimeString("hr-HR", { hour: "2-digit", minute: "2-digit" });
+const fmtLongDate = (ms) => new Date(ms).toLocaleDateString("hr-HR", { day: "numeric", month: "short", year: "numeric" });
+function sessionRecs(s) { return st.recs.filter((r) => r.session_id === s.id); }
 function renderSession() {
   const a = st.active, mine = a && st.patient && a.patient_id === st.patient.id;
   const other = a && !mine ? st.patients.find((p) => p.id === a.patient_id) : null;
-  $("#clSessState").textContent = mine ? "Sesija u tijeku" : other ? `Aktivna sesija: ${other.name}` : "Nema aktivne sesije";
-  $("#clSessPreset").textContent = mine && a.preset ? "Preset na početku: " + a.preset : "";
+  $("#clSessState").textContent = mine ? "u tijeku" : other ? `aktivna: ${other.name}` : "nema aktivne";
+  $("#clSessPreset").textContent = mine && a.preset ? "Preset na početku sesije: " + a.preset : "";
   $("#clSessBtn").textContent = mine ? "Završi sesiju" : "Započni sesiju";
-  $("#clSessBtn").classList.toggle("danger", !!mine);
-  const notes = $("#clSessNotes"); notes.classList.toggle("hidden", !mine);
-  if (mine && document.activeElement !== notes) notes.value = a.notes || "";
+  $("#clSessBtn").classList.toggle("danger", !!mine); $("#clSessBtn").classList.toggle("pri", !mine);
+  $("#clSessBtn").disabled = !st.patient;
+  const notes = $("#clSessNotes"); notes.disabled = !mine;
+  notes.placeholder = mine ? "Dodaj bilješke o ovoj terapijskoj sesiji…" : "Započnite sesiju za bilješke.";
+  if (document.activeElement !== notes) notes.value = mine ? a.notes || "" : "";
   clearInterval(timerH); $("#clTimer").textContent = "";
   if (mine) { const tick = () => ($("#clTimer").textContent = fmtDur((Date.now() - a.start) / 1000)); tick(); timerH = setInterval(tick, 1000); }
-  $("#clSessCount").textContent = st.sessions.length ? `(${st.sessions.length})` : "";
+  $("#clSessCount").textContent = `${st.sessions.length} ${st.sessions.length === 1 ? "sesija" : "sesija"}`;
   const list = $("#clSessions"); list.innerHTML = "";
-  if (!st.patient) list.innerHTML = '<div class="dim small">Odaberite pacijenta.</div>';
-  else if (!st.sessions.length) list.innerHTML = '<div class="dim small">Nema sesija.</div>';
+  if (!st.patient) list.innerHTML = '<div class="dim small">Odaberite klijenta.</div>';
+  else if (!st.sessions.length) list.innerHTML = '<div class="dim small">Nema sesija. Započnite sesiju — bilježe se postavke, snimke i analize.</div>';
   st.sessions.forEach((s) => {
-    const d = el("div", "cl-item click");
-    d.innerHTML = `<div><b>${fmtTime(s.start)}</b> <span class="dim">${s.end ? fmtDur((s.end - s.start) / 1000) : "u tijeku"}</span></div>` +
-      `<div class="small dim">${[s.preset ? esc(s.preset) : null, s.recordings ? s.recordings + " snim." : null].filter(Boolean).join(" · ")}</div>` +
-      (s.notes ? `<div class="small dim clip">${esc(s.notes)}</div>` : "");
-    d.title = "Detalji sesije"; d.onclick = () => openSession(s.id);
+    const recs = sessionRecs(s), analyses = recs.flatMap((r) => (r.analyses || []).map((x) => ({ ...x, rec: r })));
+    const type = recs.length ? '<span class="tag acc"><span data-ic="activity"></span>Analiza glasa</span>' : '<span class="tag"><span data-ic="mic"></span>Real-time</span>';
+    const d = el("div", "sess");
+    d.innerHTML = `<div class="top"><div class="grow"><div class="date"><span data-ic="calendar"></span>${fmtLongDate(s.start)}</div></div>${type}</div>
+      <div class="meta"><span class="tag"><span data-ic="clock"></span>${s.end ? fmtDur((s.end - s.start) / 1000) : "u tijeku"}</span><span>${fmtClock(s.start)}${s.end ? " – " + fmtClock(s.end) : ""}</span>${s.preset ? `<span>· ${esc(s.preset)}</span>` : ""}</div>
+      ${s.notes ? `<div class="small dim clip" title="${esc(s.notes)}">${esc(s.notes)}</div>` : ""}
+      ${recs.map((r) => `<div class="rec" data-r="${r.id}"><span data-ic="file-audio"></span><span class="grow">${esc(recTitle(r))} <span class="dim">${r.duration.toFixed(1)} s</span></span><button class="small" data-open="${r.id}" title="Otvori analizu"><span data-ic="activity"></span></button><a class="btn small" href="/api/recordings/${r.id}/wav" download title="Preuzmi"><span data-ic="download"></span></a></div>`).join("")}
+      ${analyses.length ? `<div class="row small" style="margin-top:6px"><span data-ic="bars"></span><b class="grow">Glasovne analize</b><span class="badge">${analyses.length}</span></div>` +
+        analyses.slice(-3).map((x) => { const r = x.report; return `<div class="an"><div class="row"><b class="grow">${esc(x.label || recTitle(x.rec))}</b><span class="tag">${x.start <= 0.001 && x.end >= x.rec.duration - 0.01 ? "cijela" : num(x.start, 1) + "–" + num(x.end, 1) + " s"}</span></div>
+          <div class="kv"><span class="dim">Srednja visina</span><b>${num(r.f0_mean, 1)} Hz</b><span class="dim">HNR</span><b>${num(r.hnr_db, 2)} dB</b><span class="dim">Jitter</span><b>${num(r.jitter_local, 3)} %</b><span class="dim">Shimmer</span><b>${num(r.shimmer_local, 3)} %</b>${r.cpps != null ? `<span class="dim">CPPS</span><b>${num(r.cpps, 2)} dB</b>` : ""}</div></div>`; }).join("") : ""}`;
+    d.onclick = (e) => {
+      const o = e.target.closest("[data-open]"); if (o) { e.stopPropagation(); const r = st.recs.find((x) => x.id === o.dataset.open); if (r) openAnalysis(r); return; }
+      if (e.target.closest("a")) return;
+      openSession(s.id);
+    };
     list.append(d);
   });
 }
@@ -198,6 +218,8 @@ $("#clSessBtn").onclick = async () => {
     await loadPatients();
   } catch (e) { toast(e.message); }
 };
+$("#clSessNotes").oninput = () => { clearTimeout(timerN); timerN = setTimeout(() => $("#clSessNotes").onchange(), 800); };
+let timerN = 0;
 $("#clSessNotes").onchange = () => { if (st.active) api("PUT", "/api/sessions/" + st.active.id, { notes: $("#clSessNotes").value }).catch((e) => toast(e.message)); };
 
 // Human-readable summary of a node's settings (session detail, chain chips).
@@ -250,54 +272,61 @@ $("#sApply").onclick = async () => {
 // ============================================================ recordings
 function recTitle(r) { return r.task || r.label || "Snimka"; }
 function renderRecs() {
-  const list = $("#clRecs"); list.innerHTML = "";
   $("#clRecCount").textContent = st.recs.length ? `(${st.recs.length})` : "";
-  if (!st.patient) list.innerHTML = '<div class="dim small">Odaberite pacijenta.</div>';
-  else if (!st.recs.length) list.innerHTML = '<div class="dim small">Nema snimaka. Snimajte na tabu "Analiza glasa".</div>';
-  st.recs.forEach((r) => {
-    const d = el("div", "cl-item row");
-    const info = el("div", "grow click");
-    const nA = (r.annotations || []).length;
-    info.innerHTML = `<b>${esc(recTitle(r))}</b>${r.task && r.label ? ` <span class="dim">${esc(r.label)}</span>` : ""}<div class="small dim">${fmtTime(r.created)} · ${r.duration.toFixed(1)} s · ${r.source === "out" ? "obrađeno" : "suhi mikrofon"}${nA ? ` · ${nA} ozn.` : ""}</div>`;
-    info.onclick = () => openAnalysis(r);
-    const del = el("button", "small", "✕"); del.title = "Obriši snimku";
-    del.onclick = () => deleteRec(r);
-    d.append(info, del); list.append(d);
-  });
   renderRecTable();
 }
+const SRC = { in: "mikrofon", out: "obrađeno", upload: "učitano" };
 async function deleteRec(r) {
   if (!confirm(`Obrisati snimku "${recTitle(r)}" (${fmtTime(r.created)}) s oznakama i AI mišljenjima?`)) return;
   try { await api("DELETE", "/api/recordings/" + r.id); } catch (e) { toast(e.message); }
 }
 function renderRecTable() {
   const box = $("#clRecTable");
-  if (!st.patient) { box.innerHTML = '<div class="dim small">Odaberite pacijenta.</div>'; return; }
-  if (!st.recs.length) { box.innerHTML = '<div class="dim small">Nema snimaka.</div>'; return; }
+  if (!st.patient) { box.innerHTML = '<div class="dim small">Odaberite klijenta (lijevo) — snimke se spremaju uz klijenta i aktivnu sesiju.</div>'; return; }
+  if (!st.recs.length) { box.innerHTML = '<div class="dim small">Nema snimaka. Snimite ili učitajte audio gore.</div>'; return; }
   const sess = Object.fromEntries(st.sessions.map((s) => [s.id, s]));
-  box.innerHTML = `<table><thead><tr><th>Datum</th><th>Zadatak</th><th>Oznaka</th><th>Trajanje</th><th>Izvor</th><th>Sesija</th><th>Oznake</th><th></th></tr></thead><tbody>${st.recs.map((r) =>
-    `<tr data-id="${r.id}"><td>${fmtTime(r.created)}</td><td>${esc(r.task || "—")}</td><td>${esc(r.label || "")}</td><td class="mono">${r.duration.toFixed(1)} s</td><td>${r.source === "out" ? "obrađeno" : "mikrofon"}</td><td>${r.session_id && sess[r.session_id] ? fmtDate(sess[r.session_id].start) : "—"}</td><td>${(r.annotations || []).length || ""}</td>
-     <td class="acts"><button class="small pri" data-a="open">Analiza</button><a class="btn small" href="/api/recordings/${r.id}/wav" download>WAV</a><a class="btn small" href="/api/recordings/${r.id}/textgrid" download title="Praat TextGrid">TG</a><button class="small" data-a="del">✕</button></td></tr>`).join("")}</tbody></table>`;
+  box.innerHTML = `<table><thead><tr><th>Datum</th><th>Zadatak</th><th>Oznaka</th><th class="r">Trajanje</th><th>Izvor</th><th>Sesija</th><th class="r">Oznake</th><th class="r">Analize</th><th></th></tr></thead><tbody>${st.recs.map((r) =>
+    `<tr data-id="${r.id}" class="click${an.rec && an.rec.id === r.id ? " sel" : ""}"><td>${fmtTime(r.created)}</td><td>${esc(r.task || "—")}</td><td>${esc(r.label || "")}</td><td class="mono r">${r.duration.toFixed(1)} s</td><td>${SRC[r.source] || r.source}</td><td>${r.session_id && sess[r.session_id] ? fmtDate(sess[r.session_id].start) : "—"}</td><td class="r">${(r.annotations || []).length || ""}</td><td class="r">${(r.analyses || []).length || ""}</td>
+     <td class="acts"><button class="small pri" data-a="open"><span data-ic="activity"></span>Otvori</button><a class="btn small" href="/api/recordings/${r.id}/wav" download title="WAV"><span data-ic="download"></span></a><button class="small" data-a="del" title="Obriši"><span data-ic="trash"></span></button></td></tr>`).join("")}</tbody></table>`;
   box.querySelectorAll("tr[data-id]").forEach((tr) => {
     const r = st.recs.find((x) => x.id === tr.dataset.id);
-    tr.querySelector('[data-a="open"]').onclick = () => openAnalysis(r);
-    tr.querySelector('[data-a="del"]').onclick = () => deleteRec(r);
+    tr.onclick = (e) => { if (e.target.closest("a")) return; if (e.target.closest('[data-a="del"]')) { e.stopPropagation(); return deleteRec(r); } openAnalysis(r); };
   });
 }
 
 // ============================================================ tabs, mute
+const PAGES = {
+  rehab: ["sliders", "Real-time audio", "Slušna povratna veza: EQ, DAF, FAF, šum, diskontinuitet"],
+  analiza: ["activity", "Analiza glasa", "Spektrogram, visina, formanti i akustička analiza (Praat)"],
+  napredak: ["trending", "Napredak", "Mjere kroz vrijeme i usporedba snimaka"],
+};
 function setTab(t) {
   st.tab = t;
   document.querySelectorAll("#clTabs button").forEach((b) => b.classList.toggle("sel", b.dataset.tab === t));
   $("#clRehab").classList.toggle("hidden", t !== "rehab");
   $("#clAnaliza").classList.toggle("hidden", t !== "analiza");
   $("#clNapredak").classList.toggle("hidden", t !== "napredak");
-  // progress review needs the room; devices and the live view stay on the working tabs
-  document.querySelectorAll(".cl-status, .cl-live").forEach((e) => e.classList.toggle("hidden", t === "napredak"));
+  const [icon, title, sub] = PAGES[t];
+  $("#clPageIcon").dataset.ic = icon; Icons.apply($("#clPageIcon").parentNode);
+  $("#clPageTitle").textContent = title; $("#clPageSub").textContent = sub;
+  // one live view, shown where it is needed: level check and recording on the analysis page
+  const card = $("#clLiveCard");
+  if (t === "analiza" && card.parentNode !== $("#anLiveSlot")) { $("#anLiveSlot").append(card); $("#clLiveTitle").textContent = "Uživo: valni oblik i spektrogram"; }
+  if (t === "rehab" && card.parentNode !== $("#rtLiveRow")) { $("#rtLiveRow").prepend(card); $("#clLiveTitle").textContent = "Spektrogram u stvarnom vremenu"; }
+  if (sono) requestAnimationFrame(() => sono.resize());
   lsSet("ssb.cltab", t);
   if (t === "napredak") loadProgress();
   liveSub(); applyTabMute();
 }
+// collapsible side panels (drawers on small screens)
+function sidePanel(sel, key) {
+  const elx = $(sel), narrow = () => window.matchMedia("(max-width:1100px)").matches;
+  if (lsGet(key, "1") === "0") elx.classList.add("closed");
+  return () => { if (narrow()) elx.classList.toggle("open"); else { elx.classList.toggle("closed"); lsSet(key, elx.classList.contains("closed") ? "0" : "1"); } if (sono) requestAnimationFrame(() => sono.resize()); };
+}
+$("#clClientsToggle").onclick = sidePanel("#clClients", "ssb.clients");
+$("#clSideToggle").onclick = sidePanel("#clSession", "ssb.session");
+$("#clChip").onclick = () => { const c = $("#clClients"); if (window.matchMedia("(max-width:1100px)").matches) c.classList.add("open"); else c.classList.remove("closed"); $("#clSearch").focus(); };
 function applyTabMute() {
   const want = st.visible && st.tab === "analiza" && $("#clAutoMute").checked;
   if (want && !st.mutedByTab) { st.mutedByTab = true; send({ t: "mute", on: true }); }
@@ -378,7 +407,7 @@ function toastInfo(msg) { const t = $("#toast"); t.classList.add("info"); toast(
 let sono = null;
 function ensureSono() { if (!sono) sono = new Sono.LiveSono($("#clSonoHost"), { onWindow: () => liveSub() }); }
 function liveSub() {
-  const on = st.visible && !document.hidden && !isOpen("#anModal") && st.tab !== "napredak";
+  const on = st.visible && !document.hidden && st.tab !== "napredak";
   send({ t: "live", on, win: sono ? sono.win : 0.005 });
 }
 document.addEventListener("visibilitychange", liveSub);
@@ -483,9 +512,6 @@ function buildEqSliders() {
     c.innerHTML = `<span class="v mono">0</span><div class="tr" tabindex="0" role="slider" aria-label="${fk(f)} Hz" aria-valuemin="${EQ_MIN}" aria-valuemax="${EQ_MAX}">` +
       `<div class="zero" style="top:${z}%"></div><div class="fill"></div><div class="th"></div></div><span class="f mono">${fk(f)}</span>`;
     const tr = c.querySelector(".tr");
-    const fromY = (e) => { const r = tr.getBoundingClientRect(); setBand(i, EQ_MAX - ((e.clientY - r.top) / r.height) * (EQ_MAX - EQ_MIN)); };
-    tr.addEventListener("pointerdown", (e) => { if (!node("eq")) return; e.preventDefault(); tr.setPointerCapture(e.pointerId); tr.focus(); fromY(e); });
-    tr.addEventListener("pointermove", (e) => { if (tr.hasPointerCapture(e.pointerId)) fromY(e); });
     tr.addEventListener("dblclick", () => setBand(i, 0));
     tr.addEventListener("keydown", (e) => {
       const s = e.shiftKey ? 3 : 0.5;
@@ -496,6 +522,30 @@ function buildEqSliders() {
     tr.addEventListener("focus", () => ($("#clEqVal").textContent = `${fk(f)} Hz: ${band(i) > 0 ? "+" : ""}${band(i)} dB`));
     box.append(c);
   });
+  // drag across the columns: every band passed gets the value under the pointer,
+  // bands skipped by a fast movement are interpolated — a smooth curve in one stroke
+  let drag = null;
+  const at = (e) => {
+    const cols = box.querySelectorAll(".eqb"); let best = 0, bd = 1e9;
+    cols.forEach((c, i) => { const r = c.getBoundingClientRect(), d = Math.abs(e.clientX - (r.left + r.width / 2)); if (d < bd) { bd = d; best = i; } });
+    const r = cols[best].querySelector(".tr").getBoundingClientRect();
+    return [best, EQ_MAX - clamp((e.clientY - r.top) / r.height, 0, 1) * (EQ_MAX - EQ_MIN)];
+  };
+  box.addEventListener("pointerdown", (e) => {
+    if (!node("eq") || !e.target.closest(".tr")) return;
+    e.preventDefault(); box.setPointerCapture(e.pointerId); e.target.closest(".tr").focus();
+    const [i, g] = at(e); drag = [i, g]; setBand(i, g);
+  });
+  box.addEventListener("pointermove", (e) => {
+    if (!drag || !box.hasPointerCapture(e.pointerId)) return;
+    const [i, g] = at(e), [i0, g0] = drag;
+    const step = i > i0 ? 1 : -1;
+    for (let k = i0 + step; step > 0 ? k <= i : k >= i; k += step) setBand(k, g0 + ((g - g0) * (k - i0)) / (i - i0));
+    if (i === i0) setBand(i, g);
+    drag = [i, g];
+  });
+  const end = () => (drag = null);
+  box.addEventListener("pointerup", end); box.addEventListener("pointercancel", end);
 }
 function eqPointer(e) {
   if (!(e.buttons & 1) || !node("eq")) return;
@@ -523,6 +573,7 @@ async function loadPresets() {
   renderPresets();
 }
 function renderPresetBadge() {
+  $("#sbPreset").textContent = st.currentPreset ? st.currentPreset + (st.presetDirty ? " (izmijenjen)" : "") : "Nijedan odabran";
   const b = $("#clPresetBadge");
   b.classList.toggle("hidden", !st.currentPreset);
   b.textContent = st.currentPreset ? "Preset: " + st.currentPreset + (st.presetDirty ? " • izmijenjeno" : "") : "";
@@ -588,10 +639,15 @@ const MODULES = [
     ctl: [["color", "Vrsta", ["Bijeli", "Ružičasti", "Smeđi", "Uskopojasni"]], ["level", "Razina", -80, 0, 1, "dB"], ["freq", "Središnja frekv.", 100, 8000, 10, "Hz"], ["route", "Uho", ["Oba", "Lijevo", "Desno"]]] },
   { role: "interrupt", title: "Diskontinuitet (prekidanje)", hint: "Periodično utišavanje signala — trajanje pauze na kraju svakog perioda.",
     ctl: [["period", "Period", 50, 5000, 10, "ms"], ["gap", "Pauza", 10, 2000, 10, "ms"], ["depth", "Dubina", 0, 100, 1, "%", 0.01]] },
-  { role: "mic", title: "Mikrofon", hint: "Mono mikrofon na lijevom ulazu → oba uha.", always: true,
-    ctl: [["source", "Ulaz", ["Stereo", "Lijevi → oba", "Desni → oba", "Mono zbroj"]]] },
-  { role: "ears", title: "Slušalice — glasnoća po uhu", hint: "0–200 %. Utišavanje jednog uha: gumb 🔊 kod mjerača razine.", always: true, link: true,
-    ctl: [["left", "Lijevo uho", 0, 200, 1, "%"], ["right", "Desno uho", 0, 200, 1, "%"]] },
+];
+// Stereo volume (DigiLingua "Stereo Volume"): input gain before the EQ is the mic
+// node's level, output gain after the EQ is the EQ's output, then each ear.
+const VOLUME = [
+  ["mic", "source", "Ulaz (mikrofon)", ["Stereo", "Lijevi → oba", "Desni → oba", "Mono zbroj"]],
+  ["mic", "gain", "Ulazno pojačanje (prije EQ-a)", 0, 200, 1, "%"],
+  ["eq", "out", "Izlazno pojačanje (poslije EQ-a)", -24, 24, 0.5, "dB"],
+  ["ears", "left", "Lijevo uho", 0, 200, 1, "%"],
+  ["ears", "right", "Desno uho", 0, 200, 1, "%"],
 ];
 function buildModules() {
   const box = $("#clModules"); box.innerHTML = "";
@@ -599,7 +655,7 @@ function buildModules() {
     const c = el("div", "card2 mod"); c.dataset.role = m.role;
     const h = el("div", "h row"); h.append(el("span", "grow", m.title));
     if (!m.always) {
-      const t = el("button", "tog", "ISKLJ."); t.onclick = () => { const n = node(m.role); if (n) { setBypass(n.id, !n.bypass); syncAll(); } };
+      const t = el("button", "tog", ""); t.onclick = () => { const n = node(m.role); if (n) { setBypass(n.id, !n.bypass); syncAll(); } };
       h.append(t);
     }
     c.append(h, el("div", "dim small", m.hint));
@@ -626,16 +682,50 @@ function buildModules() {
       }
       c.append(row);
     });
-    if (m.link) { const l = el("label", "chk small"); l.innerHTML = '<input type="checkbox" id="clLink" checked> poveži L/D'; c.append(l); }
     box.append(c);
   });
+  // stereo volume card
+  const c = el("div", "card2 mod"); c.dataset.role = "volume";
+  c.innerHTML = '<div class="h row"><span data-ic="headphones"></span><span class="grow">Glasnoća i kanali</span><label class="chk small"><input type="checkbox" id="clLink" checked> poveži L/D</label></div><div class="dim small">Pojačanje prije i poslije EQ-a te glasnoća po uhu (0–200 %).</div>';
+  VOLUME.forEach(([role, id, label, a, b, step, unit]) => {
+    const row = el("label", "ctl"); row.dataset.role = role; row.append(el("span", null, label));
+    if (Array.isArray(a)) {
+      const sl = el("select"); a.forEach((o, i) => sl.add(new Option(o, i))); sl.dataset.p = id; sl.dataset.r = role;
+      sl.onchange = () => { setP(role, id, +sl.value); renderChainSoon(); };
+      row.append(sl);
+    } else {
+      const r = el("input"); r.type = "range"; r.min = a; r.max = b; r.step = step; r.dataset.p = id; r.dataset.r = role; r.dataset.scale = 1;
+      const v = el("input", "num mono"); v.type = "number"; v.min = a; v.max = b; v.step = step;
+      const apply = (x) => {
+        x = clamp(+x, a, b); r.value = x; v.value = x;
+        if (id === "gain") { setP("mic", "left", x); setP("mic", "right", x); }
+        else setP(role, id, x);
+        if (role === "ears" && $("#clLink").checked) setP("ears", id === "left" ? "right" : "left", x);
+        syncModules(); syncEars(); renderChainSoon();
+      };
+      r.oninput = () => apply(r.value); v.onchange = () => apply(v.value);
+      r.ondblclick = () => apply(unit === "dB" ? 0 : 100);
+      row.append(r, v, el("span", "dim small", unit));
+    }
+    c.append(row);
+  });
+  box.append(c);
 }
 function syncModules() {
   document.querySelectorAll("#clModules .mod").forEach((c) => {
+    if (c.dataset.role === "volume") {
+      c.classList.toggle("missing", !node("mic") || !node("eq") || !node("ears"));
+      c.querySelectorAll("[data-p]").forEach((inp) => {
+        if (!node(inp.dataset.r) || document.activeElement === inp) return;
+        const v = inp.dataset.p === "gain" ? pval("mic", "left") : pval(inp.dataset.r, inp.dataset.p);
+        if (inp.tagName === "SELECT") inp.value = Math.round(v); else { const x = +(+v).toFixed(2); inp.value = x; inp.nextSibling.value = x; }
+      });
+      return;
+    }
     const n = node(c.dataset.role);
     c.classList.toggle("missing", !n);
     const t = c.querySelector(".tog");
-    if (t) { t.textContent = n && !n.bypass ? "UKLJ." : "ISKLJ."; t.classList.toggle("on", !!n && !n.bypass); }
+    if (t) { t.textContent = ""; t.title = n && !n.bypass ? "Uključeno — klik isključuje" : "Isključeno — klik uključuje"; t.setAttribute("aria-pressed", !!n && !n.bypass); t.classList.toggle("on", !!n && !n.bypass); }
     c.classList.toggle("byp", !!n && n.bypass);
     c.querySelectorAll("[data-p]").forEach((inp) => {
       if (!n || document.activeElement === inp) return;
@@ -663,19 +753,57 @@ $("#clLoadChain").onclick = async () => {
 // ============================================================ recording
 $("#clRecBtn").onclick = async () => {
   try {
-    if (st.recording) { const r = await api("POST", "/api/record/stop"); toastInfo(`Spremljeno: ${r.duration.toFixed(1)} s`); }
-    else {
-      if (!AUD.running) return toast("Zvuk nije pokrenut — kliknite ▶ Pokreni zvuk");
-      if (!st.patient && !confirm("Nije odabran pacijent — snimiti bez pacijenta?")) return;
+    if (st.recording) {
+      const r = await api("POST", "/api/record/stop");
+      toastInfo(`Spremljeno: ${r.duration.toFixed(1)} s — otvaram analizu`);
+      await loadPatientData().catch(() => {});
+      openAnalysis(st.recs.find((x) => x.id === r.id) || r);
+    } else {
+      if (!AUD.running) return toast("Zvuk nije pokrenut — kliknite ▶ Pokreni audio");
+      if (!st.patient && !confirm("Nije odabran klijent — snimiti bez klijenta?")) return;
       await api("POST", "/api/record/start", { patient_id: st.patient?.id || null, source: $("#clRecSrc").value, label: $("#clRecLabel").value.trim(), task: $("#clRecTask").value });
     }
   } catch (e) { toast(e.message); }
 };
 function showRec(on, secs) {
   st.recording = on;
-  const b = $("#clRecBtn"); b.classList.toggle("live", on);
-  b.textContent = on ? `ZAVRŠI SNIMANJE  ${fmtDur(secs || 0)}` : "ZAPOČNI SNIMANJE";
+  $("#clRecBtn").classList.toggle("live", on);
+  $("#clRecTxt").textContent = on ? `Zaustavi  ${fmtDur(secs || 0)}` : "Snimi";
 }
+
+// ---- load an audio file: WAV goes to the server untouched (exact analysis);
+// other formats are decoded by the browser and sent as 16-bit WAV
+function encodeWav(buf) {
+  const ch = Math.min(2, buf.numberOfChannels), n = buf.length, sr = buf.sampleRate, bytes = 44 + n * ch * 2;
+  const v = new DataView(new ArrayBuffer(bytes)), w = (o, t) => [...t].forEach((c, i) => v.setUint8(o + i, c.charCodeAt(0)));
+  w(0, "RIFF"); v.setUint32(4, bytes - 8, true); w(8, "WAVE"); w(12, "fmt "); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, ch, true);
+  v.setUint32(24, sr, true); v.setUint32(28, sr * ch * 2, true); v.setUint16(32, ch * 2, true); v.setUint16(34, 16, true); w(36, "data"); v.setUint32(40, n * ch * 2, true);
+  const data = [...Array(ch)].map((_, c) => buf.getChannelData(c));
+  for (let i = 0, o = 44; i < n; i++) for (let c = 0; c < ch; c++, o += 2) v.setInt16(o, Math.round(clamp(data[c][i], -1, 1) * 32767), true);
+  return v.buffer;
+}
+$("#clUploadBtn").onclick = () => $("#clUpload").click();
+$("#clUpload").onchange = async () => {
+  const f = $("#clUpload").files[0]; $("#clUpload").value = ""; if (!f) return;
+  if (!st.patient && !confirm("Nije odabran klijent — učitati snimku bez klijenta?")) return;
+  const b = $("#clUploadBtn"); b.disabled = true; const old = b.innerHTML; b.textContent = "Učitavam…";
+  try {
+    let body = await f.arrayBuffer();
+    const isWav = /\.wav$/i.test(f.name) || new TextDecoder().decode(new Uint8Array(body, 0, 4)) === "RIFF";
+    if (!isWav) {
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      body = encodeWav(await ctx.decodeAudioData(body)); ctx.close();
+    }
+    const q = new URLSearchParams({ patient: st.patient?.id || "", task: $("#clRecTask").value, label: $("#clRecLabel").value.trim() || f.name.replace(/\.[^.]+$/, "") });
+    const r = await fetch("/api/recordings/upload?" + q, { method: "POST", headers: { "Content-Type": "audio/wav" }, body });
+    if (!r.ok) { let m = r.statusText; try { m = (await r.json()).error || m; } catch (_) {} throw new Error(m); }
+    const rec = await r.json();
+    toastInfo(`Učitano: ${rec.duration.toFixed(1)} s${isWav ? "" : " (pretvoreno u WAV)"}`);
+    await loadPatientData().catch(() => {});
+    openAnalysis(st.recs.find((x) => x.id === rec.id) || rec);
+  } catch (e) { toast("Učitavanje: " + e.message); }
+  finally { b.disabled = false; b.innerHTML = old; }
+};
 
 // ============================================================ measures (shared by the analysis view, print, export)
 // Row: [label, value text, unit, reference, ok?]; a single-element row is a group heading.
@@ -729,39 +857,177 @@ function measuresHtml(r) {
     <div class="dim small">Algoritmi su port Praata (Boersma &amp; Weenink), provjereni prema Praat 7.0. Granice su orijentacijske (MDVP/literatura) i ovise o zadatku, mikrofonu i prostoriji.${r.cpps_note ? " * " + esc(r.cpps_note) : ""}</div>`;
 }
 
-// ============================================================ analysis modal (Praat-style editor)
+// ============================================================ analysis page (Praat-style editor)
 const an = { rec: null, editor: null, report: null, sel: null, settings: null, ai: null, summary: null };
 async function openAnalysis(r) {
   closeAnalysis(true);
+  if (st.tab !== "analiza") setTab("analiza");
   an.rec = r; an.report = null; an.ai = null; an.sel = null; an.summary = null;
   await loadSettings();
   an.settings = Object.assign({}, st.settings.analysis);
-  $("#anModal").classList.remove("hidden"); liveSub();
+  $("#anArea").classList.remove("hidden");
   const sess = r.session_id && st.sessions.find((s) => s.id === r.session_id);
-  $("#anTitle").textContent = `${st.patient && r.patient_id === st.patient.id ? st.patient.name + " — " : ""}${recTitle(r)} · ${fmtTime(r.created)}${sess ? " · sesija " + fmtDate(sess.start) : ""}`;
+  $("#anTitle").textContent = `${recTitle(r)}${r.label && r.task ? " — " + r.label : ""}`;
+  $("#anSubtitle").textContent = [st.patient && r.patient_id === st.patient.id ? st.patient.name : null, fmtTime(r.created), `${num(r.duration, 2)} s`, `${r.sample_rate} Hz`, SRC[r.source] || r.source, sess ? "sesija " + fmtDate(sess.start) : null].filter(Boolean).join(" · ");
   $("#anWav").href = `/api/recordings/${r.id}/wav`; $("#anWav").download = "";
   $("#anTg").href = `/api/recordings/${r.id}/textgrid`; $("#anTg").download = "";
   $("#anReport").value = "Učitavanje…"; $("#anTiles").innerHTML = ""; $("#anMeasures").innerHTML = ""; $("#anSummary").innerHTML = ""; $("#anSelInfo").textContent = "";
   fillTasks($("#anTask"), r.task); $("#anNotes").value = r.notes || ""; $("#anSyl").value = r.syllables || "";
   $("#anAiOut").innerHTML = ""; $("#anAiPrompt").classList.add("hidden"); $("#anAiQ").value = "";
-  aiStatus(); loadAiHistory(); loadSummary(); aiRestore(r);
+  aiStatus(); loadAiHistory(); loadSummary(); aiRestore(r); renderSaved(); renderRecTable();
   an.editor = new Editor.SoundEditor($("#anEditor"), {
     rec: r, analysis: an.settings,
     onAnalyze: (sel, settings) => { an.settings = settings; runAnalysis(sel); },
-    onAnnotations: (anns) => { r.annotations = anns; loadSummary(); renderRecs(); },
+    onAnnotations: (anns) => { r.annotations = anns; loadSummary(); renderAnnList(); renderRecTable(); },
     onSettings: (na) => { an.settings = na; runAnalysis(an.sel); },
   });
-  try { await an.editor.load(); await runAnalysis([0, an.editor.dur]); }
+  an.editor.settingsForm($("#anSettingsHost"));
+  $("#anCard").scrollIntoView({ behavior: "smooth", block: "start" });
+  try { await an.editor.load(); await runAnalysis([0, an.editor.dur]); renderAnnList(); }
   catch (e) { $("#anReport").value = "Greška: " + e.message; }
 }
 function closeAnalysis(silent) {
   if (an.editor) { an.editor.destroy(); an.editor = null; }
   aiRun = null; clearInterval(aiTick); // the task keeps running on the server; reopening follows it again
   $("#anEditor").innerHTML = "";
-  if (!silent) { $("#anModal").classList.add("hidden"); $("#anModal").classList.remove("max"); liveSub(); }
+  if (!silent) { an.rec = null; $("#anArea").classList.add("hidden"); $("#anCard").classList.remove("max"); renderRecTable(); }
 }
 $("#anClose").onclick = () => closeAnalysis();
-$("#anMax").onclick = () => { $("#anModal").classList.toggle("max"); };
+$("#anMax").onclick = () => { $("#anCard").classList.toggle("max"); };
+document.querySelectorAll("#anTabs button").forEach((b) => (b.onclick = () => {
+  document.querySelectorAll("#anTabs button").forEach((x) => x.classList.toggle("sel", x === b));
+  document.querySelectorAll(".an-tab").forEach((t) => t.classList.toggle("hidden", t.dataset.t !== b.dataset.t));
+  if (b.dataset.t === "postavke" && an.editor) an.editor.settingsForm($("#anSettingsHost"));
+}));
+const anSelection = () => {
+  const e = an.editor; if (!e || !e.buf) return null;
+  return $("#anScope").value === "sel" && e.sel[1] - e.sel[0] > 0.05 ? [e.sel[0], e.sel[1]] : [0, e.dur];
+};
+$("#anRunBtn").onclick = () => { const s = anSelection(); if (!s) return; if ($("#anScope").value === "sel" && s[0] === 0 && an.editor.sel[1] - an.editor.sel[0] <= 0.05) toastInfo("Nema odabira — analiziram cijelu snimku"); runAnalysis(s); };
+$("#anSaveAn").onclick = async () => {
+  if (!an.rec || !an.sel) return toast("Prvo pokrenite analizu");
+  const whole = an.sel[0] <= 0.001 && an.sel[1] >= an.rec.duration - 0.01;
+  const label = prompt("Naziv spremljene analize:", `${recTitle(an.rec)} — ${whole ? "cijela snimka" : num(an.sel[0], 2) + "–" + num(an.sel[1], 2) + " s"}`);
+  if (label == null) return;
+  try {
+    const a = await api("POST", `/api/recordings/${an.rec.id}/analyses`, { start: an.sel[0], end: an.sel[1], settings: an.settings, label: label.trim() });
+    (an.rec.analyses = an.rec.analyses || []).push(a); renderSaved(); renderSession(); renderRecTable(); toastInfo("Analiza spremljena uz snimku i sesiju");
+  } catch (e) { toast(e.message); }
+};
+function renderSaved() {
+  const list = (an.rec && an.rec.analyses) || [], box = $("#anSaved");
+  $("#anSavedN").textContent = list.length ? `(${list.length})` : "";
+  if (!list.length) { box.innerHTML = '<div class="dim small">Nema spremljenih analiza.</div>'; return; }
+  box.innerHTML = `<table><thead><tr><th>Spremljeno</th><th>Naziv</th><th>Odsječak</th><th>Visina (postavke)</th><th class="r">F0</th><th class="r">Jitter</th><th class="r">Shimmer</th><th class="r">HNR</th><th class="r">CPPS</th><th></th></tr></thead><tbody>${list.slice().reverse().map((x) => { const r = x.report;
+    return `<tr data-id="${x.id}" class="click"><td>${fmtTime(x.created)}</td><td>${esc(x.label || "")}</td><td class="mono">${num(x.start, 2)}–${num(x.end, 2)} s</td><td>${r.settings ? r.settings.pitch_floor + "–" + r.settings.pitch_ceiling + " Hz" : ""}</td>
+      <td class="mono r">${num(r.f0_mean, 1)} Hz</td><td class="mono r">${num(r.jitter_local, 3)} %</td><td class="mono r">${num(r.shimmer_local, 3)} %</td><td class="mono r">${num(r.hnr_db, 2)} dB</td><td class="mono r">${num(r.cpps, 2)}</td>
+      <td class="acts"><button class="small" data-a="show" title="Prikaži mjere i odsječak"><span data-ic="eye"></span></button><button class="small" data-a="del" title="Obriši"><span data-ic="trash"></span></button></td></tr>`; }).join("")}</tbody></table>`;
+  box.querySelectorAll("tr[data-id]").forEach((tr) => {
+    const x = list.find((y) => y.id === tr.dataset.id);
+    tr.onclick = async (e) => {
+      if (e.target.closest('[data-a="del"]')) {
+        if (!confirm("Obrisati spremljenu analizu?")) return;
+        try { await api("DELETE", `/api/recordings/${an.rec.id}/analyses/${x.id}`); an.rec.analyses = list.filter((y) => y.id !== x.id); renderSaved(); renderSession(); renderRecTable(); } catch (er) { toast(er.message); }
+        return;
+      }
+      // show the stored result as it was measured
+      an.report = x.report; an.sel = [x.start, x.end];
+      if (an.editor && an.editor.buf) { an.editor.sel = [x.start, x.end]; an.editor.cursor = x.start; an.editor.setView(Math.max(0, x.start - 0.1), Math.min(an.editor.dur, x.end + 0.1)); }
+      tiles(x.report); $("#anMeasures").innerHTML = measuresHtml(x.report); $("#anReport").value = x.report.report || "";
+      $("#anSelInfo").textContent = `spremljeno ${fmtTime(x.created)} · ${num(x.start, 2)}–${num(x.end, 2)} s`;
+      document.querySelector('#anTabs [data-t="mjere"]').click();
+    };
+  });
+}
+function renderAnnList() {
+  const e = an.editor, box = $("#anAnnList"); if (!box) return;
+  const anns = e ? e.anns : (an.rec && an.rec.annotations) || [];
+  if (!anns.length) { box.innerHTML = ""; return; }
+  box.innerHTML = `<table><thead><tr><th>Početak</th><th>Kraj</th><th class="r">Trajanje</th><th>Vrsta</th><th>Napomena</th><th></th></tr></thead><tbody>${anns.map((a) =>
+    `<tr data-id="${a.id}" class="click"><td class="mono">${num(a.start, 3)} s</td><td class="mono">${num(a.end, 3)} s</td><td class="mono r">${num(a.end - a.start, 3)} s</td><td><span class="tag" style="border-color:${Editor.KIND_COLORS[a.kind] || "var(--line)"}">${esc(Editor.kindLabel(a.kind))}</span></td><td>${esc(a.text || "")}</td>
+     <td class="acts"><button class="small" data-a="edit" title="Uredi"><span data-ic="edit"></span></button><button class="small" data-a="del" title="Obriši"><span data-ic="trash"></span></button></td></tr>`).join("")}</tbody></table>`;
+  box.querySelectorAll("tr[data-id]").forEach((tr) => (tr.onclick = (ev) => {
+    const id = tr.dataset.id; if (!an.editor) return;
+    if (ev.target.closest('[data-a="del"]')) return an.editor.deleteAnnotation(id);
+    if (ev.target.closest('[data-a="edit"]')) return an.editor.editAnnotationById(id);
+    an.editor.selectAnnotation(id); $("#anCard").scrollIntoView({ behavior: "smooth", block: "start" });
+  }));
+}
+// ---- exports (Praat-style listings from the same analysis)
+function download(name, text, type = "text/plain;charset=utf-8") {
+  const a = document.createElement("a"); a.href = URL.createObjectURL(text instanceof Blob ? text : new Blob([text], { type })); a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1500);
+}
+const baseName = () => `${(st.patient ? st.patient.name : "snimka").replace(/\W+/g, "_")}_${new Date(an.rec.created).toISOString().slice(0, 10)}_${fold(recTitle(an.rec)).replace(/\W+/g, "_")}`;
+const csvNum = (v, d = 6) => (v == null || !isFinite(v) ? "" : String(+v.toFixed(d)));
+$("#anExportBtn").onclick = (e) => { e.stopPropagation(); $("#anExportMenu").classList.toggle("hidden"); };
+document.addEventListener("click", () => $("#anExportMenu").classList.add("hidden"));
+$("#anExportMenu").onclick = (e) => {
+  const x = e.target.closest("[data-x]")?.dataset.x; if (!x || !an.rec) return;
+  const T = an.editor && an.editor.tracks, r = an.report;
+  if (["pitch", "formant", "intensity", "pulses"].includes(x) && !T) return toast("Konture još nisu izračunate");
+  if (["csv", "praat"].includes(x) && !r) return toast("Prvo pokrenite analizu");
+  const sel = an.sel || [0, an.rec.duration], inSel = (t) => t >= sel[0] && t <= sel[1];
+  switch (x) {
+    case "csv": download(baseName() + "_mjere.csv", "\ufeffmjera;vrijednost;jedinica\n" + measureRows(r).filter((m) => m.length > 1).map((m) => `"${m[0]}";${String(m[1] ?? "").replace(/"/g, "")};${m[2]}`).join("\n"), "text/csv;charset=utf-8"); break;
+    case "praat": download(baseName() + "_voice_report.txt", praatVoiceReport(r, sel)); break;
+    case "pitch": download(baseName() + "_pitch.csv", "time_s,F0_Hz\n" + T.pitch.filter(([t, f]) => f > 0 && inSel(t)).map(([t, f]) => `${csvNum(t)},${csvNum(f, 3)}`).join("\n"), "text/csv"); break;
+    case "formant": download(baseName() + "_formanti.csv", "time_s,F1_Hz,B1_Hz,F2_Hz,B2_Hz,F3_Hz,B3_Hz,F4_Hz,B4_Hz,F5_Hz,B5_Hz\n" + T.formants.filter((f) => inSel(f[0])).map((f) => [csvNum(f[0])].concat([...Array(10)].map((_, k) => (f[k + 1] > 0 ? csvNum(f[k + 1], 1) : ""))).join(",")).join("\n"), "text/csv"); break;
+    case "intensity": download(baseName() + "_intenzitet.csv", "time_s,intensity_dB\n" + T.intensity.filter(([t]) => inSel(t)).map(([t, d]) => `${csvNum(t)},${csvNum(d, 2)}`).join("\n"), "text/csv"); break;
+    case "pulses": download(baseName() + "_pulsevi.csv", "time_s\n" + T.pulses.filter(inSel).map((t) => csvNum(t, 6)).join("\n"), "text/csv"); break;
+    case "png": { const a = document.createElement("a"); a.href = an.editor.cv.toDataURL("image/png"); a.download = baseName() + "_editor.png"; a.click(); break; }
+    case "txt": $("#anSave").click(); break;
+  }
+  $("#anExportMenu").classList.add("hidden");
+};
+// Voice report laid out like Praat's "Voice report" (same values, units and wording).
+function praatVoiceReport(r, sel) {
+  const f = (v, d, u = "") => (v == null || !isFinite(v) ? "--undefined--" : v.toFixed(d) + u);
+  const s = r.settings || an.settings || {};
+  return `-- Voice report for ${recTitle(an.rec)} (SterOidSoundBoard, Praat-compatible) --
+Date: ${new Date().toString()}
+
+Time range of SELECTION
+   From ${sel[0].toFixed(6)} to ${sel[1].toFixed(6)} seconds (duration: ${(sel[1] - sel[0]).toFixed(6)} seconds)
+Pitch:
+   Median pitch: ${f(r.f0_median, 3, " Hz")}
+   Mean pitch: ${f(r.f0_mean, 3, " Hz")}
+   Standard deviation: ${f(r.f0_sd, 3, " Hz")}
+   Minimum pitch: ${f(r.f0_min, 3, " Hz")}
+   Maximum pitch: ${f(r.f0_max, 3, " Hz")}
+Pulses:
+   Number of pulses: ${r.pulses}
+   Number of periods: ${r.periods}
+   Mean period: ${r.mean_period_ms == null ? "--undefined--" : (r.mean_period_ms / 1000).toExponential(6) + " seconds"}
+   Standard deviation of period: ${r.sd_period_ms == null ? "--undefined--" : (r.sd_period_ms / 1000).toExponential(6) + " seconds"}
+Voicing:
+   Fraction of locally unvoiced frames: ${f(r.unvoiced_fraction, 3, "%")}
+   Number of voice breaks: ${r.voice_breaks}
+   Degree of voice breaks: ${f(r.voice_break_degree, 3, "%")}
+Jitter:
+   Jitter (local): ${f(r.jitter_local, 3, "%")}
+   Jitter (local, absolute): ${r.jitter_abs_us == null ? "--undefined--" : (r.jitter_abs_us / 1e6).toExponential(3) + " seconds"}
+   Jitter (rap): ${f(r.jitter_rap, 3, "%")}
+   Jitter (ppq5): ${f(r.jitter_ppq5, 3, "%")}
+   Jitter (ddp): ${f(r.jitter_ddp, 3, "%")}
+Shimmer:
+   Shimmer (local): ${f(r.shimmer_local, 3, "%")}
+   Shimmer (local, dB): ${f(r.shimmer_db, 3, " dB")}
+   Shimmer (apq3): ${f(r.shimmer_apq3, 3, "%")}
+   Shimmer (apq5): ${f(r.shimmer_apq5, 3, "%")}
+   Shimmer (apq11): ${f(r.shimmer_apq11, 3, "%")}
+   Shimmer (dda): ${f(r.shimmer_dda, 3, "%")}
+Harmonicity of the voiced parts only:
+   Mean autocorrelation: ${f(r.mean_autocorrelation, 6)}
+   Mean noise-to-harmonics ratio: ${f(r.nhr, 6)}
+   Mean harmonics-to-noise ratio: ${f(r.hnr_db, 3, " dB")}
+
+Additional (same Praat algorithms):
+   CPPS (AVQI settings): ${f(r.cpps, 3, " dB")}
+   Formants (median, voiced frames): F1 ${f((r.formants || [])[0], 1)} · F2 ${f((r.formants || [])[1], 1)} · F3 ${f((r.formants || [])[2], 1)} · F4 ${f((r.formants || [])[3], 1)} Hz
+   Intensity mean: ${f(r.intensity_mean_db, 3, " dB")}
+Settings: pitch ${s.pitch_floor}–${s.pitch_ceiling} Hz (ac), maximum formant ${s.max_formant} Hz, ${s.n_formants} formants
+`;
+}
 // Two passes: the quick Praat measures first, then the same report with CPPS
 // (its robust trend line is O(n²) per frame, as in Praat) replaces it.
 let anSeq = 0;
@@ -925,24 +1191,24 @@ function renderProgress() {
 function drawChart(cv, pts, norm, dir, dec) {
   const d = window.devicePixelRatio || 1, W = (cv.clientWidth || 260) * d, H = 110 * d;
   cv.width = W; cv.height = H;
-  const g = cv.getContext("2d"), P = { x: 38 * d, y: 6 * d, w: W - 46 * d, h: H - 24 * d };
+  const C = Sono.pal(), g = cv.getContext("2d"), P = { x: 38 * d, y: 6 * d, w: W - 46 * d, h: H - 24 * d };
   let lo = Math.min(...pts.map((p) => p.y)), hi = Math.max(...pts.map((p) => p.y));
   if (norm != null) { lo = Math.min(lo, norm); hi = Math.max(hi, norm); }
   if (hi - lo < 1e-9) { lo -= 1; hi += 1; } const pad = (hi - lo) * 0.12; lo -= pad; hi += pad;
   const x0 = pts[0].x, x1 = pts[pts.length - 1].x;
   const X = (x, i) => P.x + (x1 > x0 ? (x - x0) / (x1 - x0) : pts.length > 1 ? i / (pts.length - 1) : 0.5) * P.w;
   const Y = (y) => P.y + (1 - (y - lo) / (hi - lo)) * P.h;
-  g.font = `${9 * d}px system-ui`; g.fillStyle = "#8b929c"; g.textAlign = "right"; g.textBaseline = "middle";
-  for (const t of Sono.ticks(lo, hi, 3)) { g.fillStyle = "#222830"; g.fillRect(P.x, Y(t), P.w, 1); g.fillStyle = "#8b929c"; g.fillText(num(t, Math.max(0, dec - 1)), P.x - 4 * d, Y(t)); }
+  g.font = `${9 * d}px system-ui`; g.fillStyle = C.text; g.textAlign = "right"; g.textBaseline = "middle";
+  for (const t of Sono.ticks(lo, hi, 3)) { g.fillStyle = C.grid; g.fillRect(P.x, Y(t), P.w, 1); g.fillStyle = C.text; g.fillText(num(t, Math.max(0, dec - 1)), P.x - 4 * d, Y(t)); }
   if (norm != null) {
     g.fillStyle = "#3fbf6f18"; const yn = Y(norm);
     if (dir === "le") g.fillRect(P.x, yn, P.w, P.y + P.h - yn); else g.fillRect(P.x, P.y, P.w, yn - P.y);
     g.strokeStyle = "#3fbf6f88"; g.setLineDash([4 * d, 3 * d]); g.beginPath(); g.moveTo(P.x, yn); g.lineTo(P.x + P.w, yn); g.stroke(); g.setLineDash([]);
   }
-  g.strokeStyle = "#4da3ff"; g.lineWidth = 1.5 * d; g.beginPath();
+  g.strokeStyle = C.acc; g.lineWidth = 1.5 * d; g.beginPath();
   pts.forEach((p, i) => (i ? g.lineTo(X(p.x, i), Y(p.y)) : g.moveTo(X(p.x, i), Y(p.y)))); g.stroke();
-  pts.forEach((p, i) => { const bad = norm != null && (dir === "le" ? p.y > norm : p.y < norm); g.fillStyle = bad ? "#e5484d" : "#4da3ff"; g.beginPath(); g.arc(X(p.x, i), Y(p.y), 3 * d, 0, 7); g.fill(); });
-  g.fillStyle = "#8b929c"; g.textBaseline = "top";
+  pts.forEach((p, i) => { const bad = norm != null && (dir === "le" ? p.y > norm : p.y < norm); g.fillStyle = bad ? "#e5484d" : C.acc; g.beginPath(); g.arc(X(p.x, i), Y(p.y), 3 * d, 0, 7); g.fill(); });
+  g.fillStyle = C.text; g.textBaseline = "top";
   g.textAlign = "left"; g.fillText(fmtDate(x0), P.x, P.y + P.h + 5 * d);
   if (pts.length > 1) { g.textAlign = "right"; g.fillText(fmtDate(x1), P.x + P.w, P.y + P.h + 5 * d); }
 }
@@ -1333,8 +1599,14 @@ api("GET", "/api/ai/tasks").then((l) => { const t = l.find((x) => x.kind === "pu
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") {
     const fs = document.querySelector(".lsono.fs"); if (fs) { fs.querySelector('[data-act="fs"]').click(); return; }
-    const top = [...document.querySelectorAll("body > .modal:not(.hidden)")].pop(); if (!top) return;
-    if (top.id === "anModal") closeAnalysis(); else if (top.id === "pModal") closeForm(); else if (top.id) top.classList.add("hidden");
+    const top = [...document.querySelectorAll("body > .modal:not(.hidden)")].pop();
+    if (!top) {
+      if ($("#anCard").classList.contains("max")) $("#anCard").classList.remove("max");
+      document.querySelectorAll(".cl-clients.open, .cl-session.open").forEach((x) => x.classList.remove("open"));
+      $("#anExportMenu").classList.add("hidden");
+      return;
+    }
+    if (top.id === "pModal") closeForm(); else if (top.id) top.classList.add("hidden");
     else { const x = top.querySelector("[data-x]"); x ? x.click() : top.remove(); }
     return;
   }
@@ -1342,6 +1614,7 @@ document.addEventListener("keydown", (e) => {
   const a = document.activeElement, tag = a ? a.tagName : "";
   if (/INPUT|TEXTAREA|SELECT/.test(tag) || document.querySelector("body > .modal:not(.hidden)")) return;
   if (e.key === " " && (tag === "BUTTON" || tag === "A")) return; // the focused control handles it
+  if (st.tab === "analiza" && an.editor && [" ", "Tab", "+", "=", "-", "ArrowLeft", "ArrowRight", "a", "A", "Delete", "Backspace"].includes(e.key)) return; // the sound editor's keys
   switch (e.key) {
     case " ": e.preventDefault(); toggleAudio(); break;
     case "r": case "R": resetEq(); break;
@@ -1370,6 +1643,11 @@ HOOKS.push((m) => {
     case "clinic": if (st.visible) reloadSoon(); break;
     case "rec": showRec(m.on, 0); break;
     case "audio": AUD.running = m.running; AUD.error = m.error || null; showAudio(); break;
+    case "theme":
+      if (an.editor) an.editor.redraw();
+      if (sono) sono.full();
+      if (st.tab === "napredak" && pr.rows.length) renderProgress();
+      break;
     case "mode":
       st.visible = m.mode === "clinic";
       if (st.visible) {

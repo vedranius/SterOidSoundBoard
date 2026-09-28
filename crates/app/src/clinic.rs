@@ -155,6 +155,22 @@ pub struct Recording {
     /// syllable-nuclei estimate for %SS).
     #[serde(default)]
     pub syllables: Option<u32>,
+    /// Analyses the clinician saved (selection, settings and all measures at that time).
+    #[serde(default)]
+    pub analyses: Vec<SavedAnalysis>,
+}
+
+/// A documented measurement: which part, with which settings, what came out.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SavedAnalysis {
+    pub id: String,
+    pub created: u64,
+    pub start: f32,
+    pub end: f32,
+    #[serde(default)]
+    pub label: String,
+    /// The Praat-compatible voice report (without the pitch contour).
+    pub report: serde_json::Value,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -412,6 +428,7 @@ mod tests {
                 .map(|(i, (a, b, k))| Annotation { id: format!("a{i}"), start: a, end: b, kind: k.into(), text: String::new() })
                 .collect(),
             syllables: None,
+            analyses: vec![],
         }
     }
 
@@ -484,6 +501,7 @@ mod tests {
                 notes: String::new(),
                 annotations: vec![],
                 syllables: None,
+            analyses: vec![],
             });
         }
         assert_eq!(c.remove_patient("a"), vec!["ra".to_string()]);

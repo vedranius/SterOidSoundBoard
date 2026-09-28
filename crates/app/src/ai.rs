@@ -728,6 +728,7 @@ mod tests {
             notes: "tvrdi počeci".into(),
             annotations: vec![],
             syllables: None,
+            analyses: vec![],
         }
     }
 

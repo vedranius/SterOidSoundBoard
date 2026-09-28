@@ -7,7 +7,8 @@ const Editor = (() => {
   const $e = (root, s) => root.querySelector(s);
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
   const DEF = {
-    fmax: 5000, win: 0.005, dyn: 70, auto: true, maxDb: 0, pre: 6, map: "praat",
+    fmax: 5000, win: 0.005, dyn: 70, auto: true, maxDb: 0, pre: 6, map: "praat", comp: 0, shape: "gauss",
+    pitchUnit: "hz", pitchStyle: "line", fShow: 5, fMaxBw: 0, fDot: 2,
     show: { spec: true, pitch: true, intensity: false, formants: true, pulses: false, slice: true },
     ivMin: 50, ivMax: 100,
   };
@@ -115,7 +116,7 @@ const Editor = (() => {
     }
     paint() {
       const g = this.cv.getContext("2d"), R = this.L(), d = R.d;
-      g.fillStyle = "#0b0d10"; g.fillRect(0, 0, this.cv.width, this.cv.height);
+      this.C = Sono.pal(); g.fillStyle = this.C.bg; g.fillRect(0, 0, this.cv.width, this.cv.height);
       g.font = `${10 * d}px system-ui`;
       this.paintWave(g, R.wave, d);
       this.paintSpec(g, R.spec, d);
@@ -124,21 +125,21 @@ const Editor = (() => {
       // selection, cursor, play head across all panes
       const top = R.wave.y, bot = R.tier.y + R.tier.h;
       const [a, b] = this.sel;
-      if (b > a) { g.fillStyle = "#4da3ff26"; const xa = this.tx(a, R.wave), xb = this.tx(b, R.wave); g.fillRect(xa, top, xb - xa, bot - top); g.fillStyle = "#4da3ff"; g.fillRect(xa, top, d, bot - top); g.fillRect(xb, top, d, bot - top); }
+      if (b > a) { g.fillStyle = this.C.sel; const xa = this.tx(a, R.wave), xb = this.tx(b, R.wave); g.fillRect(xa, top, xb - xa, bot - top); g.fillStyle = this.C.acc; g.fillRect(xa, top, d, bot - top); g.fillRect(xb, top, d, bot - top); }
       g.fillStyle = "#e5484d"; const xc = this.tx(this.cursor, R.wave); if (xc >= R.wave.x && xc <= R.wave.x + R.wave.w) g.fillRect(xc, top, d, bot - top);
       if (this.play) { const t = this.play.t0 + (this.ctx.currentTime - this.play.start); g.fillStyle = "#3fbf6f"; g.fillRect(this.tx(t, R.wave), top, 2 * d, bot - top); }
-      if (this.mouse && this.mouse.px != null) { g.strokeStyle = "#ffffff55"; g.beginPath(); g.moveTo(this.mouse.px, top); g.lineTo(this.mouse.px, bot); g.stroke();
+      if (this.mouse && this.mouse.px != null) { g.strokeStyle = this.C.cross; g.beginPath(); g.moveTo(this.mouse.px, top); g.lineTo(this.mouse.px, bot); g.stroke();
         if (this.mouse.py > R.spec.y && this.mouse.py < R.spec.y + R.spec.h) { g.beginPath(); g.moveTo(R.spec.x, this.mouse.py); g.lineTo(R.spec.x + R.spec.w, this.mouse.py); g.stroke(); } }
       this.info();
       this.paintSlice();
     }
     paintWave(g, r, d) {
-      g.fillStyle = "#05070a"; g.fillRect(r.x, r.y, r.w, r.h);
+      g.fillStyle = this.C.waveBg; g.fillRect(r.x, r.y, r.w, r.h);
       const [t0, t1] = this.view, x = this.x, sr = this.sr;
       const i0 = Math.max(0, Math.floor(t0 * sr)), i1 = Math.min(x.length, Math.ceil(t1 * sr));
       let peak = 1e-4; for (let i = i0; i < i1; i += Math.max(1, ((i1 - i0) / 20000) | 0)) peak = Math.max(peak, Math.abs(x[i]));
       const mid = r.y + r.h / 2, sc = (r.h / 2 - 2) / peak;
-      g.fillStyle = "#6fb5ff"; const W = Math.round(r.w), spp = (i1 - i0) / W;
+      g.fillStyle = this.C.wave; const W = Math.round(r.w), spp = (i1 - i0) / W;
       if (spp > 1.5) {
         for (let px = 0; px < W; px++) {
           let mn = 1, mx = -1; const a = i0 + Math.floor(px * spp), b = Math.min(i1, i0 + Math.floor((px + 1) * spp));
@@ -146,29 +147,31 @@ const Editor = (() => {
           if (mx >= mn) g.fillRect(r.x + px, mid - mx * sc, 1, Math.max(1, (mx - mn) * sc));
         }
       } else {
-        g.strokeStyle = "#6fb5ff"; g.lineWidth = d; g.beginPath();
+        g.strokeStyle = this.C.wave; g.lineWidth = d; g.beginPath();
         for (let i = i0; i < i1; i++) { const px = this.tx((i + 0.5) / sr, r), py = mid - x[i] * sc; i === i0 ? g.moveTo(px, py) : g.lineTo(px, py); }
         g.stroke();
       }
-      g.fillStyle = "#39414b"; g.fillRect(r.x, mid, r.w, 1);
+      g.fillStyle = this.C.grid; g.fillRect(r.x, mid, r.w, 1);
       if (this.set.show.pulses && this.tracks) {
         g.fillStyle = "#4dd2ffcc";
         for (const p of this.tracks.pulses) if (p >= t0 && p <= t1) g.fillRect(this.tx(p, r), r.y, 1, r.h);
       }
-      g.fillStyle = "#9aa4b1"; g.textAlign = "right"; g.textBaseline = "middle";
+      g.fillStyle = this.C.text; g.textAlign = "right"; g.textBaseline = "middle";
       g.fillText(peak.toFixed(peak < 0.1 ? 3 : 2), r.x - 4 * d, r.y + 6 * d); g.fillText("0", r.x - 4 * d, mid); g.fillText((-peak).toFixed(peak < 0.1 ? 3 : 2), r.x - 4 * d, r.y + r.h - 6 * d);
     }
     computeSpec(r) {
-      const key = [this.view[0], this.view[1], Math.round(r.w), Math.round(r.h), this.set.fmax, this.set.win, this.set.pre].join("|");
+      const key = [this.view[0], this.view[1], Math.round(r.w), Math.round(r.h), this.set.fmax, this.set.win, this.set.pre, this.set.shape, this.set.comp].join("|");
       if (key === this.specKey) return;
       this.specKey = key;
       const cols = Math.min(1600, Math.round(r.w)), rows = Math.round(r.h), sr = this.sr, x = this.x;
-      const n = Math.max(16, Math.round(2 * this.set.win * sr)), win = Sono.gaussWindow(n);
+      // Praat: physical window = 2 × effective length for the Gaussian; Hann uses the effective length
+      const n = Math.max(16, Math.round((this.set.shape === "hann" ? 1 : 2) * this.set.win * sr));
+      const win = this.set.shape === "hann" ? Float32Array.from({ length: n }, (_, i) => 0.5 - 0.5 * Math.cos((2 * Math.PI * (i + 1)) / (n + 1))) : Sono.gaussWindow(n);
       let N = 256; while (N < n) N *= 2; if (this.set.win >= 0.02 && N < 2048) N = 2048;
       const re = new Float32Array(N), im = new Float32Array(N), df = sr / N;
       let wsum = 0; for (const v of win) wsum += v;
       const out = new Float32Array(cols * rows), kmax = Math.min(N / 2 - 1, Math.ceil(this.set.fmax / df) + 1);
-      const colDb = new Float32Array(kmax + 1);
+      const colDb = new Float32Array(kmax + 1), colMax = new Float32Array(cols).fill(-300);
       let top = -300;
       for (let c = 0; c < cols; c++) {
         const t = this.view[0] + ((c + 0.5) / cols) * (this.view[1] - this.view[0]);
@@ -186,14 +189,16 @@ const Editor = (() => {
         for (let y = 0; y < rows; y++) {
           const f = (1 - (y + 0.5) / rows) * this.set.fmax, kk = f / df, k0 = Math.floor(kk), fr = kk - k0;
           const v = colDb[k0] * (1 - fr) + colDb[Math.min(kmax, k0 + 1)] * fr;
-          out[y * cols + c] = v; if (v > top) top = v;
+          out[y * cols + c] = v; if (v > top) top = v; if (v > colMax[c]) colMax[c] = v;
         }
       }
+      // Praat's dynamic compression: raise quiet columns towards the loudest one
+      if (this.set.comp > 0) for (let c = 0; c < cols; c++) { const add = this.set.comp * (top - colMax[c]); for (let y = 0; y < rows; y++) out[y * cols + c] += add; }
       this.spec = { cols, rows, db: out, top };
     }
     levels() { const top = this.set.auto ? (this.spec ? this.spec.top : 0) : this.set.maxDb; return [top - this.set.dyn, top]; }
     paintSpec(g, r, d) {
-      if (!this.set.show.spec) { g.fillStyle = "#05070a"; g.fillRect(r.x, r.y, r.w, r.h); }
+      if (!this.set.show.spec) { g.fillStyle = this.C.lane; g.fillRect(r.x, r.y, r.w, r.h); }
       else {
         this.computeSpec(r);
         const s = this.spec, [lo, hi] = this.levels(), L = Sono.lut(this.set.map), img = new ImageData(s.cols, s.rows);
@@ -202,42 +207,50 @@ const Editor = (() => {
         g.imageSmoothingEnabled = true; g.drawImage(tmp, r.x, r.y, r.w, r.h);
         Sono.colorbar(g, r.x + r.w + 56 * d, r.y + 14 * d, 10 * d, r.h - 14 * d, this.set.map, lo, hi, d, "dB");
       }
-      g.strokeStyle = "#39414b"; g.strokeRect(r.x - 0.5, r.y - 0.5, r.w + 1, r.h + 1);
-      g.fillStyle = "#9aa4b1"; g.textAlign = "right"; g.textBaseline = "middle";
+      g.strokeStyle = this.C.grid; g.strokeRect(r.x - 0.5, r.y - 0.5, r.w + 1, r.h + 1);
+      g.fillStyle = this.C.text; g.textAlign = "right"; g.textBaseline = "middle";
       for (const f of Sono.ticks(0, this.set.fmax, 6)) { const y = r.y + (1 - f / this.set.fmax) * r.h; g.fillRect(r.x - 4 * d, y, 4 * d, 1); g.fillText(Sono.fmtHz(f), r.x - 6 * d, y); }
       g.save(); g.translate(10 * d, r.y + r.h / 2); g.rotate(-Math.PI / 2); g.textAlign = "center"; g.fillText("frekvencija (Hz)", 0, 0); g.restore();
       const T = this.tracks; if (!T) return;
       const [t0, t1] = this.view, sh = this.set.show;
       if (sh.formants) {
-        g.fillStyle = "#ff3b3b"; const rr = Math.max(2, 2 * d);
+        g.fillStyle = "#e03131"; const rr = Math.max(1.5, this.set.fDot * d), nmax = 1 + 2 * this.set.fShow, bwMax = this.set.fMaxBw;
         for (const fr of T.formants) { if (fr[0] < t0 || fr[0] > t1) continue; const px = this.tx(fr[0], r);
-          for (let k = 1; k < fr.length; k += 2) { const f = fr[k]; if (f > 0 && f < this.set.fmax) g.fillRect(px - rr / 2, r.y + (1 - f / this.set.fmax) * r.h - rr / 2, rr, rr); } }
+          for (let k = 1; k < Math.min(fr.length, nmax); k += 2) { const f = fr[k]; if (f > 0 && f < this.set.fmax && !(bwMax > 0 && fr[k + 1] > bwMax)) g.fillRect(px - rr / 2, r.y + (1 - f / this.set.fmax) * r.h - rr / 2, rr, rr); } }
       }
       if (sh.intensity) {
         const lo = this.set.ivMin, hi = this.set.ivMax;
-        g.strokeStyle = "#ffd84d"; g.lineWidth = 1.6 * d; g.beginPath(); let pen = false;
+        g.strokeStyle = "#d49b00"; g.lineWidth = 1.6 * d; g.beginPath(); let pen = false;
         for (const [t, db] of T.intensity) { if (t < t0 || t > t1) { pen = false; continue; } const y = r.y + (1 - (clamp(db, lo, hi) - lo) / (hi - lo)) * r.h, px = this.tx(t, r); pen ? g.lineTo(px, y) : g.moveTo(px, y); pen = true; }
         g.stroke();
-        g.fillStyle = "#ffd84d"; g.textAlign = "left";
+        g.fillStyle = "#d49b00"; g.textAlign = "left";
         for (const v of Sono.ticks(lo, hi, 4)) { const y = r.y + (1 - (v - lo) / (hi - lo)) * r.h; g.fillRect(r.x + r.w, y, 3 * d, 1); g.fillText(v + " dB", r.x + r.w + 4 * d, y); }
       }
       if (sh.pitch) {
-        const lo = this.analysis.pitch_floor, hi = this.analysis.pitch_ceiling;
-        g.strokeStyle = "#1f8fff"; g.lineWidth = 2.5 * d; g.beginPath(); let pen = false, prev = null;
-        for (const [t, f] of T.pitch) {
-          if (t < t0 - 0.02 || t > t1 + 0.02 || !(f > 0)) { pen = false; prev = null; continue; }
-          const y = r.y + (1 - (clamp(f, lo, hi) - lo) / (hi - lo)) * r.h, px = this.tx(t, r);
-          pen ? g.lineTo(px, y) : g.moveTo(px, y); pen = true; prev = f;
+        // pitch axis in Hz (linear) or semitones re 100 Hz (logarithmic), as Praat's Pitch settings
+        const st = this.set.pitchUnit === "st", u = (f) => (st ? 12 * Math.log2(f / 100) : f);
+        const lo = u(this.analysis.pitch_floor), hi = u(this.analysis.pitch_ceiling);
+        const Y = (f) => r.y + (1 - (clamp(u(f), lo, hi) - lo) / (hi - lo)) * r.h;
+        g.strokeStyle = "#1f8fff"; g.fillStyle = "#1f8fff";
+        if (this.set.pitchStyle === "dots") {
+          const rr = Math.max(2, 2.4 * d);
+          for (const [t, f] of T.pitch) if (t >= t0 && t <= t1 && f > 0) { g.beginPath(); g.arc(this.tx(t, r), Y(f), rr, 0, 7); g.fill(); }
+        } else {
+          g.lineWidth = 2.5 * d; g.beginPath(); let pen = false;
+          for (const [t, f] of T.pitch) {
+            if (t < t0 - 0.02 || t > t1 + 0.02 || !(f > 0)) { pen = false; continue; }
+            const y = Y(f), px = this.tx(t, r); pen ? g.lineTo(px, y) : g.moveTo(px, y); pen = true;
+          }
+          g.stroke(); g.strokeStyle = this.C.bg; g.lineWidth = 0.8 * d; g.stroke();
         }
-        g.stroke(); g.strokeStyle = "#0b0d10"; g.lineWidth = 0.8 * d; g.stroke();
-        g.fillStyle = "#4da3ff"; g.textAlign = "left";
-        for (const v of Sono.ticks(lo, hi, 4)) { const y = r.y + (1 - (v - lo) / (hi - lo)) * r.h; g.fillRect(r.x + r.w, y, 3 * d, 1); g.fillText(v + " Hz", r.x + r.w + 4 * d, y + (sh.intensity ? 10 * d : 0)); }
+        g.fillStyle = "#1f8fff"; g.textAlign = "left";
+        for (const v of Sono.ticks(lo, hi, 4)) { const y = r.y + (1 - (v - lo) / (hi - lo)) * r.h; g.fillRect(r.x + r.w, y, 3 * d, 1); g.fillText(st ? v + " st" : v + " Hz", r.x + r.w + 4 * d, y + (sh.intensity ? 10 * d : 0)); }
       }
     }
     paintTier(g, r, d) {
-      g.fillStyle = "#11151a"; g.fillRect(r.x, r.y, r.w, r.h);
-      g.strokeStyle = "#39414b"; g.strokeRect(r.x - 0.5, r.y - 0.5, r.w + 1, r.h + 1);
-      g.fillStyle = "#9aa4b1"; g.textAlign = "right"; g.textBaseline = "middle"; g.fillText("oznake", r.x - 6 * d, r.y + r.h / 2);
+      g.fillStyle = this.C.tier; g.fillRect(r.x, r.y, r.w, r.h);
+      g.strokeStyle = this.C.grid; g.strokeRect(r.x - 0.5, r.y - 0.5, r.w + 1, r.h + 1);
+      g.fillStyle = this.C.text; g.textAlign = "right"; g.textBaseline = "middle"; g.fillText("oznake", r.x - 6 * d, r.y + r.h / 2);
       g.textAlign = "left";
       for (const a of this.anns) {
         if (a.end < this.view[0] || a.start > this.view[1]) continue;
@@ -251,7 +264,7 @@ const Editor = (() => {
     }
     paintAxis(g, r, d) {
       const [t0, t1] = this.view;
-      g.fillStyle = "#9aa4b1"; g.textAlign = "center"; g.textBaseline = "top";
+      g.fillStyle = this.C.text; g.textAlign = "center"; g.textBaseline = "top";
       const tk = Sono.ticks(t0, t1, Math.max(4, Math.round(r.w / (90 * d)))), dec = Math.max(0, Math.min(4, Math.ceil(-Math.log10((t1 - t0) / 10))));
       for (const t of tk) { const x = this.tx(t, r); g.fillRect(x, r.y, 1, 4 * d); g.fillText(t.toFixed(dec) + " s", x, r.y + 6 * d); }
     }
@@ -283,7 +296,7 @@ const Editor = (() => {
       side.classList.toggle("hidden", !this.set.show.slice);
       if (!this.set.show.slice || !this.buf) return;
       const g = this.sl.getContext("2d"), d = this.dpr, W = this.sl.width, H = this.sl.height;
-      g.fillStyle = "#05070a"; g.fillRect(0, 0, W, H);
+      g.fillStyle = this.C.lane; g.fillRect(0, 0, W, H);
       const ltas = $e(this.root, "[data-ltas]").checked, sr = this.sr, x = this.x;
       const n = Math.round(Math.max(0.04, 2 * this.set.win) * sr), win = Sono.gaussWindow(n);
       let N = 1024; while (N < n) N *= 2;
@@ -297,12 +310,12 @@ const Editor = (() => {
       const db = new Float32Array(kmax + 1); let top = -300;
       for (let k = 0; k <= kmax; k++) { db[k] = 10 * Math.log10(acc[k] / count + 1e-20); if (k > 0 && db[k] > top) top = db[k]; }
       const lo = top - 80, P = { x: 34 * d, y: 6 * d, w: W - 40 * d, h: H - 26 * d };
-      g.strokeStyle = "#39414b"; g.strokeRect(P.x, P.y, P.w, P.h);
-      g.fillStyle = "#9aa4b1"; g.font = `${9 * d}px system-ui`; g.textAlign = "right"; g.textBaseline = "middle";
+      g.strokeStyle = this.C.grid; g.strokeRect(P.x, P.y, P.w, P.h);
+      g.fillStyle = this.C.text; g.font = `${9 * d}px system-ui`; g.textAlign = "right"; g.textBaseline = "middle";
       for (const v of Sono.ticks(lo, top, 4)) { const y = P.y + (1 - (v - lo) / (top - lo)) * P.h; g.fillRect(P.x - 3 * d, y, 3 * d, 1); g.fillText(Math.round(v) + "", P.x - 4 * d, y); }
       g.textAlign = "center"; g.textBaseline = "top";
       for (const f of Sono.ticks(0, this.set.fmax, 4)) { const px = P.x + (f / this.set.fmax) * P.w; g.fillRect(px, P.y + P.h, 1, 3 * d); g.fillText(Sono.fmtHz(f), px, P.y + P.h + 4 * d); }
-      g.strokeStyle = "#6fb5ff"; g.lineWidth = 1.2 * d; g.beginPath();
+      g.strokeStyle = this.C.wave; g.lineWidth = 1.2 * d; g.beginPath();
       for (let k = 0; k <= kmax; k++) { const px = P.x + (k * df / this.set.fmax) * P.w, py = P.y + (1 - (clamp(db[k], lo, top) - lo) / (top - lo)) * P.h; k ? g.lineTo(px, py) : g.moveTo(px, py); }
       g.stroke();
       const info = [];
@@ -447,49 +460,78 @@ const Editor = (() => {
     }
 
     // ---------------------------------------------------------------- settings
-    openSettings() {
-      const s = this.set, an = this.analysis;
-      const dlg = document.createElement("div"); dlg.className = "modal"; dlg.style.zIndex = 70;
-      dlg.innerHTML = `<form class="modal-in card2 set-dlg"><h3>Postavke prikaza i analize</h3>
-        <fieldset><legend>Spektrogram (Spectrogram settings)</legend>
-          <label>Raspon prikaza do (Hz) <input name="fmax" type="number" min="1000" max="${Math.floor(this.sr / 2)}" step="500"></label>
-          <label>Duljina prozora (s) <select name="win"><option value="0.005">0,005 — širokopojasni</option><option value="0.01">0,010</option><option value="0.015">0,015</option><option value="0.03">0,030 — uskopojasni</option><option value="0.05">0,050</option></select></label>
+    /** Praat-style settings (spectrogram, pitch, formants, intensity) as a form in `host`. */
+    settingsForm(host, done) {
+      const s = this.set, an = this.analysis, sr = this.sr || 44100;
+      host.innerHTML = `<form class="set-form">
+        <fieldset><legend>Spektrogram</legend>
+          <label>Raspon prikaza do (Hz) <input name="fmax" type="number" min="1000" max="${Math.floor(sr / 2)}" step="500"></label>
+          <label>Duljina prozora (s) <select name="win"><option value="0.003">0,003</option><option value="0.005">0,005 — širokopojasni</option><option value="0.01">0,010</option><option value="0.015">0,015</option><option value="0.03">0,030 — uskopojasni</option><option value="0.05">0,050</option></select></label>
+          <label>Oblik prozora <select name="shape"><option value="gauss">Gaussov (Praat)</option><option value="hann">Hann</option></select></label>
           <label>Dinamički raspon (dB) <input name="dyn" type="number" min="20" max="150" step="5"></label>
-          <label class="chk"><input name="auto" type="checkbox"> autoskaliranje</label>
+          <label>Autoskaliranje <input name="auto" type="checkbox"></label>
           <label>Maksimum (dB) <input name="maxDb" type="number" step="1"></label>
           <label>Pre-emphasis (dB/okt) <input name="pre" type="number" min="0" max="12" step="1"></label>
+          <label>Dinamička kompresija (0–1) <input name="comp" type="number" min="0" max="1" step="0.1"></label>
           <label>Boje <select name="map">${Object.entries(Sono.MAPS).map(([k, n]) => `<option value="${k}">${n}</option>`).join("")}</select></label>
         </fieldset>
-        <fieldset><legend>Visina (Pitch settings)</legend>
+        <fieldset><legend>Visina tona (Pitch)</legend>
           <div class="row small"><button type="button" data-p="60,300">Muški 60–300</button><button type="button" data-p="100,500">Ženski 100–500</button><button type="button" data-p="150,700">Dječji 150–700</button><button type="button" data-p="75,600">Standard 75–600</button></div>
           <label>Donja granica (Hz) <input name="pf" type="number" min="30" max="500"></label>
           <label>Gornja granica (Hz) <input name="pc" type="number" min="100" max="1500"></label>
+          <label>Jedinica prikaza <select name="pitchUnit"><option value="hz">Hz</option><option value="st">polutonovi (re 100 Hz)</option></select></label>
+          <label>Crtanje <select name="pitchStyle"><option value="line">linija</option><option value="dots">točke (speckles)</option></select></label>
+          <div class="dim small">Granice mijenjaju i mjerenje (Praat „pitch floor/ceiling“).</div>
         </fieldset>
-        <fieldset><legend>Formanti (Formant settings)</legend>
+        <fieldset><legend>Formanti (Burg)</legend>
           <div class="row small"><button type="button" data-f="5000">Muški 5000</button><button type="button" data-f="5500">Ženski 5500</button><button type="button" data-f="8000">Dječji 8000</button></div>
           <label>Maksimalni formant (Hz) <input name="mf" type="number" min="2000" max="8000" step="100"></label>
           <label>Broj formanata <input name="nf" type="number" min="3" max="7" step="0.5"></label>
+          <label>Prikaži formanata <select name="fShow"><option>3</option><option>4</option><option>5</option><option>6</option></select></label>
+          <label>Samo širina pojasa do (Hz, 0 = sve) <input name="fMaxBw" type="number" min="0" max="2000" step="50"></label>
+          <label>Veličina točke <input name="fDot" type="number" min="1" max="6" step="0.5"></label>
         </fieldset>
         <fieldset><legend>Intenzitet (prikaz)</legend>
-          <label>Raspon (dB) <input name="ivMin" type="number" step="5"> – <input name="ivMax" type="number" step="5"></label>
+          <label>Od (dB) <input name="ivMin" type="number" step="5"></label>
+          <label>Do (dB) <input name="ivMax" type="number" step="5"></label>
+          <label>CPPS u analizi <input name="cpps" type="checkbox"></label>
         </fieldset>
-        <div class="row"><button class="pri" type="submit">Primijeni</button><button type="button" data-x>Odustani</button></div></form>`;
-      document.body.append(dlg);
-      const f = dlg.querySelector("form");
-      f.fmax.value = s.fmax; f.win.value = s.win; f.dyn.value = s.dyn; f.auto.checked = s.auto; f.maxDb.value = Math.round(s.auto ? this.levels()[1] : s.maxDb); f.pre.value = s.pre; f.map.value = s.map;
-      f.pf.value = an.pitch_floor; f.pc.value = an.pitch_ceiling; f.mf.value = an.max_formant; f.nf.value = an.n_formants; f.ivMin.value = s.ivMin; f.ivMax.value = s.ivMax;
-      dlg.querySelectorAll("[data-p]").forEach((b) => (b.onclick = () => { const [a, c] = b.dataset.p.split(","); f.pf.value = a; f.pc.value = c; }));
-      dlg.querySelectorAll("[data-f]").forEach((b) => (b.onclick = () => { f.mf.value = b.dataset.f; }));
-      dlg.querySelector("[data-x]").onclick = () => dlg.remove();
+        <div class="row" style="grid-column:1/-1"><button class="pri" type="submit">Primijeni</button>${done ? '<button type="button" data-x>Odustani</button>' : ""}<button type="button" data-reset>Zadano</button>
+          <span class="dim small">Postavke prikaza pamte se u ovom pregledniku; granice visine i formanata vrijede za ovu snimku (zadane: ⚙ Postavke).</span></div></form>`;
+      const f = host.querySelector("form");
+      const fill = () => {
+        f.fmax.value = s.fmax; f.win.value = s.win; f.shape.value = s.shape; f.dyn.value = s.dyn; f.auto.checked = s.auto; f.maxDb.value = Math.round(s.auto ? this.levels()[1] : s.maxDb);
+        f.pre.value = s.pre; f.comp.value = s.comp; f.map.value = s.map; f.pitchUnit.value = s.pitchUnit; f.pitchStyle.value = s.pitchStyle;
+        f.pf.value = this.analysis.pitch_floor; f.pc.value = this.analysis.pitch_ceiling; f.mf.value = this.analysis.max_formant; f.nf.value = this.analysis.n_formants;
+        f.fShow.value = s.fShow; f.fMaxBw.value = s.fMaxBw; f.fDot.value = s.fDot; f.ivMin.value = s.ivMin; f.ivMax.value = s.ivMax; f.cpps.checked = this.analysis.cpps !== false;
+      };
+      fill();
+      host.querySelectorAll("[data-p]").forEach((b) => (b.onclick = () => { const [a, c] = b.dataset.p.split(","); f.pf.value = a; f.pc.value = c; }));
+      host.querySelectorAll("[data-f]").forEach((b) => (b.onclick = () => { f.mf.value = b.dataset.f; }));
+      const x = host.querySelector("[data-x]"); if (x) x.onclick = () => done && done();
+      host.querySelector("[data-reset]").onclick = () => { const keep = { show: s.show }; Object.assign(s, JSON.parse(JSON.stringify(DEF)), keep); fill(); };
       f.onsubmit = async (e) => {
         e.preventDefault();
-        Object.assign(s, { fmax: clamp(+f.fmax.value, 1000, this.sr / 2), win: +f.win.value, dyn: +f.dyn.value, auto: f.auto.checked, maxDb: +f.maxDb.value, pre: +f.pre.value, map: f.map.value, ivMin: +f.ivMin.value, ivMax: +f.ivMax.value });
-        const na = { ...an, pitch_floor: +f.pf.value, pitch_ceiling: +f.pc.value, max_formant: +f.mf.value, n_formants: +f.nf.value };
-        const changed = ["pitch_floor", "pitch_ceiling", "max_formant", "n_formants"].some((k) => na[k] !== an[k]);
-        this.analysis = na; this.save(); dlg.remove(); this.specKey = null; this.draw();
+        Object.assign(s, { fmax: clamp(+f.fmax.value, 1000, sr / 2), win: +f.win.value, shape: f.shape.value, dyn: +f.dyn.value, auto: f.auto.checked, maxDb: +f.maxDb.value, pre: +f.pre.value,
+          comp: clamp(+f.comp.value || 0, 0, 1), map: f.map.value, pitchUnit: f.pitchUnit.value, pitchStyle: f.pitchStyle.value, fShow: +f.fShow.value, fMaxBw: +f.fMaxBw.value || 0, fDot: +f.fDot.value || 2,
+          ivMin: +f.ivMin.value, ivMax: +f.ivMax.value });
+        const na = { ...this.analysis, pitch_floor: +f.pf.value, pitch_ceiling: +f.pc.value, max_formant: +f.mf.value, n_formants: +f.nf.value, cpps: f.cpps.checked };
+        const changed = ["pitch_floor", "pitch_ceiling", "max_formant", "n_formants", "cpps"].some((k) => na[k] !== this.analysis[k]);
+        this.analysis = na; this.save(); this.specKey = null; this.draw(); if (done) done();
         if (changed) { await this.loadTracks(); this.opts.onSettings && this.opts.onSettings(na); }
       };
     }
+    openSettings() {
+      const dlg = document.createElement("div"); dlg.className = "modal"; dlg.style.zIndex = 70;
+      dlg.innerHTML = `<div class="modal-in card2 set-dlg"><h3>Postavke prikaza i analize</h3><div></div></div>`;
+      document.body.append(dlg);
+      this.settingsForm(dlg.querySelector(".set-dlg > div"), () => dlg.remove());
+    }
+    /** Re-render (after a theme change). */
+    redraw() { this.specKey = null; this.draw(); }
+    selectAnnotation(id) { const a = this.anns.find((x) => x.id === id); if (!a) return; this.selAnn = id; this.sel = [a.start, a.end]; this.cursor = a.start; const w = this.view[1] - this.view[0]; if (a.start < this.view[0] || a.end > this.view[1]) this.setView(a.start - w * 0.2, a.start + w * 0.8); this.draw(); }
+    editAnnotationById(id) { const a = this.anns.find((x) => x.id === id); if (a) this.editAnnotation(a); }
+    deleteAnnotation(id) { this.anns = this.anns.filter((x) => x.id !== id); if (this.selAnn === id) this.selAnn = null; this.saveAnns(); this.draw(); }
     /** JPEG snapshot of the editor view (for the AI and printed reports), at most `maxW` px wide. */
     snapshot(q = 0.85, maxW = 0) {
       if (!maxW || this.cv.width <= maxW) return this.cv.toDataURL("image/jpeg", q);
