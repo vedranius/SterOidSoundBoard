@@ -7,7 +7,7 @@ use anyhow::{anyhow, Context, Result};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, Sample, SampleFormat, SizedSample, StreamConfig};
 use serde::{Deserialize, Serialize};
-use std::sync::atomic::{AtomicU32, Ordering::Relaxed};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering::Relaxed};
 use std::sync::{mpsc, Arc};
 use std::thread::JoinHandle;
 use std::time::Instant;
@@ -53,7 +53,19 @@ pub struct EngineStats {
     pub load: AtomicF32,
     pub xruns: AtomicU32,
     pub callback_frames: AtomicU32,
+    /// Silence the device output (meters/recording still see the signal).
+    pub mute: AtomicBool,
+    /// Spectrum tap source: 0 = input (dry), 1 = output (processed).
+    pub tap_src: AtomicU32,
+    /// Recorder tap: on/off and source (0 = input, 1 = output).
+    pub rec_on: AtomicBool,
+    pub rec_src: AtomicU32,
+    /// Stereo frames the recorder could not keep up with.
+    pub rec_dropped: AtomicU32,
 }
+
+/// Seconds of stereo audio the recorder ring can buffer.
+const REC_RING_SECS: usize = 4;
 
 pub fn list_devices() -> Vec<HostDevices> {
     cpal::available_hosts()
@@ -71,6 +83,10 @@ pub fn list_devices() -> Vec<HostDevices> {
 
 pub struct AudioEngine {
     pub info: RunningInfo,
+    /// Mono samples of the tapped signal for the live spectrum.
+    pub scope: rtrb::Consumer<f32>,
+    /// Interleaved stereo samples for the recorder (taken while recording).
+    pub rec: Option<rtrb::Consumer<f32>>,
     tx: rtrb::Producer<Box<Schedule>>,
     garbage: rtrb::Consumer<Box<Schedule>>,
     stop: Option<mpsc::Sender<()>>,
@@ -82,14 +98,14 @@ impl AudioEngine {
         let (tx, cmd_rx) = rtrb::RingBuffer::<Box<Schedule>>::new(8);
         let (garbage_tx, garbage) = rtrb::RingBuffer::<Box<Schedule>>::new(16);
         let (stop_tx, stop_rx) = mpsc::channel::<()>();
-        let (ready_tx, ready_rx) = mpsc::channel::<Result<RunningInfo>>();
+        let (ready_tx, ready_rx) = mpsc::channel::<Result<(RunningInfo, TapConsumers)>>();
         let cfg = cfg.clone();
         // cpal::Stream is !Send on some platforms: own it on a dedicated thread.
         let thread = std::thread::Builder::new()
             .name("audio-io".into())
             .spawn(move || match open_streams(&cfg, stats, cmd_rx, garbage_tx) {
-                Ok((info, streams)) => {
-                    let _ = ready_tx.send(Ok(info));
+                Ok((info, streams, taps)) => {
+                    let _ = ready_tx.send(Ok((info, taps)));
                     let _ = stop_rx.recv();
                     drop(streams);
                 }
@@ -97,9 +113,9 @@ impl AudioEngine {
                     let _ = ready_tx.send(Err(e));
                 }
             })?;
-        let info = ready_rx.recv().map_err(|_| anyhow!("audio thread died"))??;
+        let (info, (scope, rec)) = ready_rx.recv().map_err(|_| anyhow!("audio thread died"))??;
         log::info!("audio started: {info:?}");
-        Ok(AudioEngine { info, tx, garbage, stop: Some(stop_tx), thread: Some(thread) })
+        Ok(AudioEngine { info, scope, rec: Some(rec), tx, garbage, stop: Some(stop_tx), thread: Some(thread) })
     }
 
     /// Hand a new schedule to the audio thread (lock-free).
@@ -138,13 +154,14 @@ fn find_host(name: &Option<String>) -> Result<cpal::Host> {
 }
 
 type Streams = (Option<cpal::Stream>, cpal::Stream);
+type TapConsumers = (rtrb::Consumer<f32>, rtrb::Consumer<f32>);
 
 fn open_streams(
     cfg: &AudioConfig,
     stats: Arc<EngineStats>,
     cmd_rx: rtrb::Consumer<Box<Schedule>>,
     garbage_tx: rtrb::Producer<Box<Schedule>>,
-) -> Result<(RunningInfo, Streams)> {
+) -> Result<(RunningInfo, Streams, TapConsumers)> {
     let host = find_host(&cfg.host)?;
     let out_dev = match &cfg.output {
         Some(n) => host
@@ -208,7 +225,11 @@ fn open_streams(
         None
     };
 
+    let (scope_prod, scope_cons) = rtrb::RingBuffer::<f32>::new(8192);
+    let (rec_prod, rec_cons) = rtrb::RingBuffer::<f32>::new(sr.0 as usize * 2 * REC_RING_SECS);
     let ctx = OutCtx {
+        scope: scope_prod,
+        rec: rec_prod,
         sched: None,
         cmd_rx,
         garbage_tx,
@@ -240,7 +261,7 @@ fn open_streams(
         out_channels: out_cfg.channels,
         in_channels: in_info.1,
     };
-    Ok((info, (in_stream, out_stream)))
+    Ok((info, (in_stream, out_stream), (scope_cons, rec_cons)))
 }
 
 fn build_input<T>(dev: &cpal::Device, cfg: &StreamConfig, mut prod: rtrb::Producer<f32>, stats: Arc<EngineStats>) -> Result<cpal::Stream>
@@ -276,6 +297,8 @@ where
 }
 
 struct OutCtx {
+    scope: rtrb::Producer<f32>,
+    rec: rtrb::Producer<f32>,
     sched: Option<Box<Schedule>>,
     cmd_rx: rtrb::Consumer<Box<Schedule>>,
     garbage_tx: rtrb::Producer<Box<Schedule>>,
@@ -349,6 +372,11 @@ impl OutCtx {
                 }
             }
             let mut pk = [0f32; 2];
+            let mute = self.stats.mute.load(Relaxed);
+            let tap_out = self.stats.tap_src.load(Relaxed) == 1;
+            let rec_on = self.stats.rec_on.load(Relaxed);
+            let rec_out = self.stats.rec_src.load(Relaxed) == 1;
+            let mut rec_drop = 0;
             for i in 0..n {
                 // Safety limiter: never send NaN or >0 dBFS to the converter.
                 let mut l = self.outbuf[0][i];
@@ -357,9 +385,29 @@ impl OutCtx {
                 if !r.is_finite() { r = 0.0; }
                 l = l.clamp(-1.0, 1.0);
                 r = r.clamp(-1.0, 1.0);
+                let (il, ir) = (self.inbuf[0][i], self.inbuf[1][i]);
+                // Taps are wait-free; if a reader falls behind we drop, never block.
+                let (sl, sr) = if tap_out { (l, r) } else { (il, ir) };
+                let _ = self.scope.push((sl + sr) * 0.5);
+                if rec_on {
+                    let (a, b) = if rec_out { (l, r) } else { (il, ir) };
+                    if self.rec.slots() >= 2 {
+                        let _ = self.rec.push(a);
+                        let _ = self.rec.push(b);
+                    } else {
+                        rec_drop += 1;
+                    }
+                }
+                if mute {
+                    l = 0.0;
+                    r = 0.0;
+                }
                 pk[0] = pk[0].max(l.abs());
                 pk[1] = pk[1].max(r.abs());
                 write(done + i, l, r);
+            }
+            if rec_drop > 0 {
+                self.stats.rec_dropped.fetch_add(rec_drop, Relaxed);
             }
             self.stats.out_peak[0].max(pk[0]);
             self.stats.out_peak[1].max(pk[1]);

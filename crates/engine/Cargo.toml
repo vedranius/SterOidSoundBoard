@@ -7,6 +7,7 @@ license.workspace = true
 [dependencies]
 cpal = "0.15"
 rtrb = "0.3"
+hound = "3.5"
 serde = { version = "1", features = ["derive"] }
 anyhow = "1"
 log = "0.4"

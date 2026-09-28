@@ -6,15 +6,20 @@
 <title>SterOidSoundBoard</title>
 <link rel="stylesheet" href="style.css">
 </head>
-<body>
+<body data-mode="music">
 <header>
   <strong class="logo">SterOidSoundBoard</strong><span id="ver" class="dim"></span>
+  <div id="modes" class="seg">
+    <button data-mode="music" class="sel">Music</button><button data-mode="clinic">DigiLingua</button>
+  </div>
   <div id="status" class="status">audio: —</div>
   <div class="meters-top">
     <span class="dim">IN</span><div class="m"><i id="mInL"></i></div><div class="m"><i id="mInR"></i></div>
     <span class="dim">OUT</span><div class="m"><i id="mOutL"></i></div><div class="m"><i id="mOutR"></i></div>
     <span class="dim">DSP</span><span id="load">0%</span><span class="dim">xruns</span><span id="xruns">0</span>
   </div>
+  <button id="btnMute" title="Silence the output (meters and recording keep working)">Mute</button>
+  <button id="btnPresets">Presets</button>
   <button id="btnAudio">Audio</button>
 </header>
 
@@ -30,7 +35,13 @@
   <div id="audioErr" class="err"></div>
 </section>
 
-<main>
+<section id="presetPanel" class="panel hidden">
+  <label>Preset <select id="selPreset"></select></label>
+  <button id="btnPresetLoad">Load</button><button id="btnPresetSave">Save as…</button><button id="btnPresetDel">Delete</button>
+  <span class="dim">Templates:</span><span id="tplList" class="row"></span>
+</section>
+
+<main id="music">
   <aside id="palette"><div class="dim small">Tap to add</div></aside>
   <div id="board">
     <svg id="cables"></svg>
@@ -38,7 +49,90 @@
     <div class="io out" id="io-out"><b class="port in" data-node="out"></b><span>OUT</span></div>
   </div>
 </main>
+
+<main id="clinic" class="hidden" lang="hr">
+  <aside class="cl-side">
+    <h3>Pacijent</h3>
+    <div class="row"><select id="clPatient"></select><button id="clNewP" title="Novi pacijent">+</button><button id="clEditP">Uredi</button></div>
+    <form id="clPForm" class="cl-form hidden">
+      <label>Ime i prezime<input name="name" required maxlength="200"></label>
+      <label>Šifra / MBO<input name="code" maxlength="100"></label>
+      <label>Datum rođenja<input name="birth" type="date"></label>
+      <label>Bilješke<textarea name="notes" rows="3" maxlength="20000"></textarea></label>
+      <div class="row"><button type="submit" class="pri">Spremi</button><button type="button" id="clPCancel">Odustani</button><button type="button" id="clPDel" class="danger">Obriši</button></div>
+    </form>
+
+    <h3>Sesija</h3>
+    <div class="row"><span id="clSessState" class="dim">Nema aktivne sesije</span><span id="clTimer" class="mono"></span></div>
+    <button id="clSessBtn" class="pri wide">Započni sesiju</button>
+    <textarea id="clSessNotes" rows="3" placeholder="Bilješke sesije (spremaju se automatski)" class="hidden"></textarea>
+    <details><summary>Povijest sesija</summary><div id="clSessions" class="cl-list"></div></details>
+
+    <h3>Snimke</h3>
+    <div id="clRecs" class="cl-list"></div>
+  </aside>
+
+  <section class="cl-main">
+    <div class="row cl-top">
+      <div class="seg" id="clTabs"><button data-tab="rehab" class="sel">Rehabilitacija</button><button data-tab="analiza">Analiza glasa</button></div>
+      <label class="dim small">Spektar: <select id="clTap"><option value="0">mikrofon (suhi)</option><option value="1">izlaz (obrađeni)</option></select></label>
+    </div>
+    <div id="clMissing" class="banner hidden">
+      Trenutni board nema DigiLingua lanac (mikrofon → EQ → DAF → FAF → diskontinuitet → šum → uši).
+      <button id="clLoadChain" class="pri">Učitaj DigiLingua lanac</button>
+      <span class="dim small">Zamjenjuje trenutni board — spremite ga prije kao preset ako ga želite zadržati.</span>
+    </div>
+
+    <div class="cl-live">
+      <div class="card2"><div class="h">Live sonagram 0–8 kHz</div><canvas id="clSono" width="600" height="160"></canvas></div>
+      <div class="card2"><div class="h">VU <span id="clVuDb" class="mono dim"></span></div>
+        <div class="vu"><i id="clVu"></i></div>
+        <div class="vu-scale mono"><span>-60</span><span>-48</span><span>-36</span><span>-24</span><span>-12</span><span>0 dB</span></div>
+      </div>
+    </div>
+
+    <div id="clRehab">
+      <div class="card2">
+        <div class="h row"><span>31-pojasni EQ (ISO 1/3 oktave)</span><span id="clEqVal" class="mono dim"></span>
+          <span class="grow"></span><span id="clEqPresets" class="row"></span></div>
+        <svg id="clEq" viewBox="0 0 310 144" preserveAspectRatio="none"></svg>
+        <div id="clEqLabels" class="eq-labels mono"></div>
+      </div>
+      <div class="cl-grid" id="clModules"></div>
+    </div>
+
+    <div id="clAnaliza" class="hidden">
+      <div class="card2 cl-recbox">
+        <label class="chk"><input type="checkbox" id="clAutoMute" checked> Utišaj izlaz na ovom tabu (nema jeke)</label>
+        <div class="row">
+          <label>Izvor <select id="clRecSrc"><option value="in">suhi mikrofon</option><option value="out">obrađeni izlaz</option></select></label>
+          <label class="grow">Oznaka <input id="clRecLabel" placeholder="npr. vokal /a/, čitanje teksta"></label>
+        </div>
+        <button id="clRecBtn" class="rec">ZAPOČNI SNIMANJE</button>
+        <div id="clRecInfo" class="dim small">Za analizu glasa: produženi vokal /a/ 3–5 s, stalna udaljenost od mikrofona, tiha prostorija.</div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<div id="anModal" class="modal hidden" lang="hr">
+  <div class="modal-in">
+    <div class="row"><h2 id="anTitle" class="grow">Analiza glasa</h2><button id="anClose">✕</button></div>
+    <div class="card2">
+      <div class="h row"><span>Odabir segmenta (povucite mišem/prstom)</span><span id="anSel" class="mono dim"></span><span class="grow"></span>
+        <button id="anPlay" class="pri">▶ Reproduciraj odabir</button><button id="anAll">Cijela snimka</button><button id="anRun" class="pri">Analiziraj odabir</button></div>
+      <div id="anWaveBox" class="wavebox"><canvas id="anWave" width="1200" height="140"></canvas><div id="anSelBox" class="selbox"></div></div>
+      <div class="h" style="margin-top:8px">Sonagram odabira 0–8 kHz · <span style="color:#ffd84d">F0 kontura</span> (desna skala 0–500 Hz)</div>
+      <canvas id="anSpec" width="1200" height="256" class="spec"></canvas>
+    </div>
+    <div id="anTiles" class="tiles"></div>
+    <div class="card2"><div class="h row"><span>Klinički nalaz</span><span class="grow"></span><button id="anCopy">Kopiraj</button><button id="anSave">Spremi .txt</button></div>
+      <textarea id="anReport" readonly rows="16" class="mono"></textarea></div>
+  </div>
+</div>
+
 <div id="toast"></div>
 <script src="app.js"></script>
+<script src="clinic.js"></script>
 </body>
 </html>

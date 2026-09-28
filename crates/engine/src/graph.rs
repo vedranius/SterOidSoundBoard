@@ -20,6 +20,10 @@ pub struct NodeDesc {
     pub x: f32,
     #[serde(default)]
     pub y: f32,
+    /// Optional function tag ("eq", "daf", …) so mode-specific UIs (e.g.
+    /// DigiLingua) can find their controls on an ordinary board.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -55,6 +59,36 @@ impl Board {
     pub fn node_mut(&mut self, id: &str) -> Option<&mut NodeDesc> {
         self.nodes.iter_mut().find(|n| n.id == id)
     }
+    pub fn by_role(&self, role: &str) -> Option<&NodeDesc> {
+        self.nodes.iter().find(|n| n.role.as_deref() == Some(role))
+    }
+
+    /// Make an externally supplied board (preset file, API) safe to run:
+    /// unique ids, known endpoints, no duplicate cables, clamped params,
+    /// consistent `next_id`. Fails only if the graph has a cycle.
+    pub fn sanitize(&mut self) -> Result<(), String> {
+        let mut seen = std::collections::HashSet::new();
+        self.nodes.retain(|n| n.id != INPUT_ID && n.id != OUTPUT_ID && seen.insert(n.id.clone()));
+        for n in &mut self.nodes {
+            let specs = n.kind.params();
+            n.params.retain(|k, _| specs.iter().any(|s| s.id == k));
+            for s in specs {
+                let v = n.params.get(s.id).copied().unwrap_or(s.default);
+                n.params.insert(s.id.to_string(), s.clamp(v));
+            }
+        }
+        let mut conns: Vec<Connection> = vec![];
+        for c in std::mem::take(&mut self.connections) {
+            if self.exists(&c.from) && self.exists(&c.to) && c.from != OUTPUT_ID && c.to != INPUT_ID && c.from != c.to && !conns.contains(&c) {
+                conns.push(c);
+            }
+        }
+        self.connections = conns;
+        let max = self.nodes.iter().filter_map(|n| n.id.strip_prefix('n')?.parse::<u32>().ok()).max().unwrap_or(0);
+        self.next_id = self.next_id.max(max + 1);
+        self.topo_order().map(|_| ())
+    }
+
     fn exists(&self, id: &str) -> bool {
         id == INPUT_ID || id == OUTPUT_ID || self.node(id).is_some()
     }
@@ -224,7 +258,7 @@ mod tests {
         let mut prev = INPUT_ID.to_string();
         for (i, k) in kinds.iter().enumerate() {
             let id = format!("n{i}");
-            b.nodes.push(NodeDesc { id: id.clone(), kind: *k, params: Default::default(), bypass: false, x: 0.0, y: 0.0 });
+            b.nodes.push(NodeDesc { id: id.clone(), kind: *k, params: Default::default(), bypass: false, x: 0.0, y: 0.0, role: None });
             b.connections.push(Connection { from: prev, to: id.clone() });
             prev = id;
         }
@@ -245,6 +279,25 @@ mod tests {
             s.run(256, &mut out);
         }
         assert!((out[0][255] - 0.5).abs() < 1e-3, "{}", out[0][255]);
+    }
+
+    #[test]
+    fn sanitize_repairs_foreign_boards() {
+        let (mut b, _) = board_with(&[NodeKind::Gain, NodeKind::Delay]);
+        b.nodes.push(b.nodes[0].clone()); // duplicate id
+        b.nodes[0].params.insert("gain".into(), 1e9);
+        b.nodes[0].params.insert("bogus".into(), 1.0);
+        b.connections.push(Connection { from: "ghost".into(), to: OUTPUT_ID.into() });
+        b.connections.push(b.connections[0].clone());
+        b.next_id = 0;
+        b.sanitize().unwrap();
+        assert_eq!(b.nodes.len(), 2);
+        assert_eq!(b.connections.len(), 3);
+        assert_eq!(b.nodes[0].params["gain"], 24.0);
+        assert!(!b.nodes[0].params.contains_key("bogus"));
+        assert_eq!(b.next_id, 2);
+        b.connections.push(Connection { from: "n1".into(), to: "n0".into() });
+        assert!(b.sanitize().is_err());
     }
 
     #[test]

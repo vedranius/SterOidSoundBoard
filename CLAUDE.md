@@ -6,6 +6,13 @@ rebuilt from scratch in Rust. One executable = audio engine + HTTP/WebSocket ser
 Controlled from any browser (desktop, tablet, phone). Targets: Linux x64, Windows x64, Raspberry Pi 4/5 (arm64).
 Owner: Vedran (communicates in Croatian, casual/direct; wants precise, copy-paste-ready answers).
 
+Two modes on ONE engine/workflow: **Music** (pedalboard) and **DigiLingua** (speech/voice
+rehabilitation for clinicians; merged from repos vedranius/DigiLingua and vedranius/digilingua-lite).
+DigiLingua is never a separate audio path: it is an ordinary Board whose nodes carry `role`
+tags (mic, eq, daf, faf, interrupt, noise, ears) that `web/clinic.js` binds to. New clinical
+features = new generic nodes/engine services + a view, usable by musicians too.
+DigiLingua UI text is Croatian; Music UI is English.
+
 ## Hard requirements
 - Real-time audio on every platform is non-negotiable: the audio thread must never lock, allocate, block or log.
 - One-click start: user runs a single executable, everything is bundled, no installer dependencies.
@@ -14,10 +21,17 @@ Owner: Vedran (communicates in Croatian, casual/direct; wants precise, copy-past
 - AI providers: Claude API, any OpenAI-compatible API, local Ollama — user's choice, user's own key.
 
 ## Layout
-- `crates/engine` (steroid-engine): `audio.rs` cpal I/O, `graph.rs` Board/Schedule (DAG, topo sort,
-  lock-free swap via rtrb, garbage returned to control thread), `nodes.rs` built-in DSP + ParamSpec.
-- `crates/app` (steroidsoundboard): `main.rs` args/startup, `state.rs` App state, `server.rs` axum REST + WS.
-- `web/` vanilla JS UI, embedded with rust-embed.
+- `crates/engine` (steroid-engine): `audio.rs` cpal I/O + taps (spectrum ring, recorder ring, mute),
+  `graph.rs` Board/Schedule (DAG, topo sort, lock-free swap via rtrb, garbage returned to control
+  thread, `sanitize()` for foreign boards, node roles), `nodes.rs` built-in DSP + ParamSpec
+  (11 nodes incl. Eq31, Daf, PitchShift, Noise, Interrupter, Channels), `fft.rs` FFT + live spectrum,
+  `analysis.rs` voice analysis (F0/jitter/shimmer/HNR + Croatian report), `record.rs` WAV writer
+  thread + loader, `templates.rs` built-in boards (DigiLingua chain).
+- `crates/app` (steroidsoundboard): `main.rs` args/startup, `state.rs` App state (presets, recording,
+  clinic ops; lock order `inner` → `clinic`), `clinic.rs` patients/sessions/recordings store,
+  `server.rs` axum REST + WS.
+- `web/` vanilla JS UI, embedded with rust-embed: `app.js` core + pedalboard (HOOKS, setParam,
+  setBypass shared by views), `clinic.js` DigiLingua view.
 - `packaging/linux/` systemd unit + RPi install script. `.github/workflows/build.yml` CI + releases on `v*` tags.
 
 ## Conventions
@@ -28,14 +42,18 @@ Owner: Vedran (communicates in Croatian, casual/direct; wants precise, copy-past
 - Every DSP node output goes through NaN/inf guard; output is hard-clamped to 0 dBFS.
 
 ## Status
-v0.1.0 done (engine foundation, 5 built-in nodes, web pedalboard, CI). Windows/arm64 CI not yet verified.
+v0.1.0 engine foundation, pedalboard, CI.
+v0.2.0 DigiLingua mode + 6 new nodes, recording, voice analysis, presets/templates, mute, live spectrum.
+Windows/arm64 CI not yet verified. No auth yet (patient data!) — PIN/login is top priority in 0.3.
 
-## Next: v0.2.0
+## Next: v0.3.0
+0. PIN/login (patient data on LAN), optional per-clinic data dir.
 1. Verify CI green on all 3 targets; fix whatever breaks (Windows first).
 2. Windows ASIO (cpal `asio` feature; ASIO SDK in CI, check its license) + WASAPI exclusive option.
 3. Native duplex on Linux (JACK/PipeWire via cpal `jack` feature) to remove the input ring-buffer latency.
 4. Pisound support on RPi (button + MIDI), RT tuning check.
 5. State-preserving graph edits (reuse processors across Schedule rebuilds so delay tails don't reset).
 6. Multi-channel routing (beyond first 2 channels).
-Roadmap after: 0.3 LV2 hosting + plugin manager, 0.4 control-surface designer + MIDI learn/OSC,
-0.5 AI Lab (Faust), 0.6 RPi image, auth/PIN, presets.
+Roadmap after: 0.4 LV2 hosting + plugin manager, 0.5 control-surface designer + MIDI learn/OSC,
+0.6 AI Lab (Faust), 0.7 RPi image, snapshots, DigiLingua exercise protocols + progress charts
+(analysis history per patient), PDF report export.

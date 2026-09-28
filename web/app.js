@@ -2,6 +2,9 @@
 const $ = (s) => document.querySelector(s);
 const boardEl = $("#board"), cablesEl = $("#cables");
 let TYPES = {}, BOARD = { nodes: [], connections: [] }, ME = 0, ws = null, devices = [];
+// Other views (DigiLingua) subscribe to every server message through HOOKS.
+const HOOKS = [];
+const emitHooks = (m) => HOOKS.forEach((f) => { try { f(m); } catch (e) { console.error(e); } });
 
 // ---------------------------------------------------------------- helpers
 async function api(method, path, body) {
@@ -89,10 +92,16 @@ function card(n) {
   dragCard(hd, c, n);
   const bd = el("div", "bd");
   bd.append(el("div", "nm", "<i></i>"));
-  info.params.forEach((s) => {
+  // Nodes with many params (31-band EQ) keep the card small: bands fold away.
+  const many = info.params.length > 8;
+  let fold = null;
+  if (many) { fold = el("details"); fold.append(el("summary", null, `${info.params.length - 1} bands`)); }
+  info.params.forEach((s, idx) => {
     const v = n.params[s.id] ?? s.default;
-    const row = el("div", "prm"); row.append(el("span", null, s.name));
-    const val = el("span", "v", fmt(s, v)); row.append(val);
+    const tight = many && idx < info.params.length - 1;
+    const row = el("div", "prm" + (tight ? " tight" : "")); row.append(el("span", null, s.name));
+    const val = el("span", "v", fmt(s, v));
+    if (!tight) row.append(val);
     let input;
     if (s.options.length) {
       input = el("select"); s.options.forEach((o, i) => input.add(new Option(o, i, false, i === Math.round(v))));
@@ -107,12 +116,36 @@ function card(n) {
       };
       input.ondblclick = () => { input.value = toSlider(s, s.default); input.oninput(); };
     }
-    input.dataset.param = s.id; row.append(input); bd.append(row);
+    input.dataset.param = s.id; row.append(input);
+    if (tight) { row.append(val); fold.append(row); } else bd.append(row);
   });
+  if (fold) bd.append(fold);
   const pin = el("b", "port in"); pin.dataset.node = n.id;
   const pout = el("b", "port out"); pout.dataset.node = n.id;
   c.append(hd, bd, pin, pout);
   return c;
+}
+// Shared control helpers: any view changes the board through these, so the
+// pedalboard, DigiLingua and every connected tablet stay in sync.
+function paramUI(nodeId, param, value) {
+  const n = BOARD.nodes.find((x) => x.id === nodeId); if (!n) return;
+  n.params[param] = value;
+  const inp = document.querySelector(`#c-${nodeId} [data-param="${param}"]`); if (!inp) return;
+  const s = TYPES[n.kind].params.find((p) => p.id === param);
+  if (inp.tagName === "SELECT") inp.value = Math.round(value); else inp.value = toSlider(s, value);
+  inp.parentElement.querySelector(".v").textContent = fmt(s, value);
+}
+const pendingParams = new Map(); let paramRaf = 0;
+function setParam(nodeId, param, value) {
+  paramUI(nodeId, param, value);
+  pendingParams.set(nodeId + "\u0000" + param, { node: nodeId, param, value });
+  if (!paramRaf) paramRaf = requestAnimationFrame(() => {
+    paramRaf = 0; pendingParams.forEach((p) => send({ t: "param", ...p })); pendingParams.clear();
+  });
+}
+function setBypass(nodeId, on) {
+  const n = BOARD.nodes.find((x) => x.id === nodeId); if (!n) return;
+  n.bypass = on; send({ t: "bypass", node: nodeId, on }); applyBypass(n);
 }
 function applyBypass(n) { const c = $("#c-" + n.id); if (!c) return; c.classList.toggle("byp", n.bypass); const b = c.querySelector(".hd button"); b.className = n.bypass ? "" : "on"; }
 
@@ -175,23 +208,17 @@ function onMsg(m) {
     case "hello": ME = m.client; break;
     case "board": BOARD = m.board; render(); break;
     case "audio": showRunning(m.running, m.error); break;
-    case "param": {
-      if (m.src === ME) break;
-      const n = BOARD.nodes.find((x) => x.id === m.node); if (!n) break;
-      n.params[m.param] = m.value;
-      const inp = document.querySelector(`#c-${m.node} [data-param="${m.param}"]`); if (!inp) break;
-      const s = TYPES[n.kind].params.find((p) => p.id === m.param);
-      if (inp.tagName === "SELECT") inp.value = Math.round(m.value); else inp.value = toSlider(s, m.value);
-      inp.parentElement.querySelector(".v").textContent = fmt(s, m.value);
-      break;
-    }
+    case "param": if (m.src !== ME) paramUI(m.node, m.param, m.value); break;
     case "bypass": { if (m.src === ME) break; const n = BOARD.nodes.find((x) => x.id === m.node); if (n) { n.bypass = m.on; applyBypass(n); } break; }
     case "move": {
       if (m.src === ME) break; const n = BOARD.nodes.find((x) => x.id === m.node); const c = $("#c-" + m.node);
       if (n && c) { n.x = m.x; n.y = m.y; c.style.left = m.x + "px"; c.style.top = m.y + "px"; drawCables(); }
       break;
     }
+    case "mute": showMute(m.on); break;
+    case "presets": if (!$("#presetPanel").classList.contains("hidden")) loadPresets(); break;
     case "meters":
+      showMute(m.mute);
       setMeter("#mInL", m.in[0]); setMeter("#mInR", m.in[1]); setMeter("#mOutL", m.out[0]); setMeter("#mOutR", m.out[1]);
       $("#load").textContent = Math.round(m.load * 100) + "%"; $("#xruns").textContent = m.xruns;
       for (const [id, v] of Object.entries(m.nodes)) {
@@ -200,13 +227,53 @@ function onMsg(m) {
       }
       break;
   }
+  emitHooks(m);
 }
 function connectWs() {
   ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws");
   ws.onmessage = (e) => onMsg(JSON.parse(e.data));
-  ws.onopen = async () => { BOARD = await api("GET", "/api/board"); render(); };
+  ws.onopen = async () => { BOARD = await api("GET", "/api/board"); render(); emitHooks({ t: "board", board: BOARD }); };
   ws.onclose = () => { $("#status").textContent = "disconnected — reconnecting…"; setTimeout(connectWs, 1500); };
 }
+
+// ---------------------------------------------------------------- mute, presets, modes
+function showMute(on) { const b = $("#btnMute"); b.classList.toggle("warn", !!on); b.textContent = on ? "Muted" : "Mute"; b.dataset.on = on ? "1" : ""; }
+$("#btnMute").onclick = () => send({ t: "mute", on: !$("#btnMute").dataset.on });
+
+$("#btnPresets").onclick = async () => { $("#presetPanel").classList.toggle("hidden"); await loadPresets(); };
+async function loadPresets() {
+  const [list, tpl] = await Promise.all([api("GET", "/api/presets"), api("GET", "/api/templates")]);
+  const sel = $("#selPreset"); sel.innerHTML = "";
+  list.forEach((n) => sel.add(new Option(n, n)));
+  if (!list.length) sel.add(new Option("(no presets yet)", ""));
+  const t = $("#tplList"); t.innerHTML = "";
+  tpl.forEach((x) => {
+    const b = el("button", null, x.name); b.title = x.description;
+    b.onclick = () => { if (confirm(`Replace the current board with "${x.name}"?\nSave it as a preset first if you want to keep it.`)) api("POST", "/api/templates/" + x.id).catch((e) => toast(e.message)); };
+    t.append(b);
+  });
+}
+$("#btnPresetLoad").onclick = () => { const n = $("#selPreset").value; if (n) api("POST", `/api/presets/${encodeURIComponent(n)}/load`).catch((e) => toast(e.message)); };
+$("#btnPresetSave").onclick = async () => {
+  const n = prompt("Preset name:", $("#selPreset").value || BOARD.name || ""); if (!n) return;
+  try { await api("POST", "/api/presets", { name: n }); await loadPresets(); } catch (e) { toast(e.message); }
+};
+$("#btnPresetDel").onclick = async () => {
+  const n = $("#selPreset").value; if (!n || !confirm(`Delete preset "${n}"?`)) return;
+  try { await api("DELETE", "/api/presets/" + encodeURIComponent(n)); await loadPresets(); } catch (e) { toast(e.message); }
+};
+
+// Music (pedalboard) and DigiLingua (clinical) are two views of the same board and engine.
+function setMode(mode) {
+  document.body.dataset.mode = mode;
+  document.querySelectorAll("#modes button").forEach((b) => b.classList.toggle("sel", b.dataset.mode === mode));
+  $("#music").classList.toggle("hidden", mode !== "music");
+  $("#clinic").classList.toggle("hidden", mode !== "clinic");
+  try { localStorage.setItem("ssb.mode", mode); } catch (_) {}
+  if (mode === "music") drawCables();
+  emitHooks({ t: "mode", mode });
+}
+document.querySelectorAll("#modes button").forEach((b) => (b.onclick = () => setMode(b.dataset.mode)));
 
 // ---------------------------------------------------------------- boot
 (async () => {
@@ -214,6 +281,11 @@ function connectWs() {
   const st = await api("GET", "/api/status");
   $("#ver").textContent = "v" + st.version;
   showRunning(st.running, st.error);
+  showMute(st.mute);
   buildPalette();
+  let mode = "music";
+  try { mode = localStorage.getItem("ssb.mode") || (location.hash === "#digilingua" ? "clinic" : "music"); } catch (_) {}
+  if (location.hash === "#digilingua") mode = "clinic";
+  setMode(mode === "clinic" ? "clinic" : "music");
   connectWs();
 })();
