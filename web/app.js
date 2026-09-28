@@ -8,11 +8,11 @@ const emitHooks = (m) => HOOKS.forEach((f) => { try { f(m); } catch (e) { consol
 
 // ---------------------------------------------------------------- helpers
 async function api(method, path, body) {
-  const r = await fetch(path, { method, headers: { "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
+  const r = await fetch(path, { method, headers: { "Content-Type": "application/json", "x-lang": I18N.lang }, body: body ? JSON.stringify(body) : undefined });
   if (!r.ok) { let m = r.statusText; try { m = (await r.json()).error || m; } catch (_) {} throw new Error(m); }
   return r.status === 204 ? null : r.json();
 }
-function toast(msg) { const t = $("#toast"); t.textContent = msg; t.classList.add("show"); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove("show"), 3000); }
+function toast(msg) { const t = $("#toast"); t.textContent = I18N.t(String(msg)); t.classList.add("show"); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove("show"), 3000); }
 function send(o) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(o)); }
 function el(tag, cls, html) { const e = document.createElement(tag); if (cls) e.className = cls; if (html != null) e.innerHTML = html; return e; }
 
@@ -282,6 +282,8 @@ function setTheme(t) {
   try { localStorage.setItem("ssb.theme", t); } catch (_) {}
   emitHooks({ t: "theme", theme: t });
 }
+$("#langSel").value = I18N.lang;
+$("#langSel").onchange = (e) => I18N.set(e.target.value);
 $("#btnTheme").onclick = () => setTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark");
 setTheme((() => { try { return localStorage.getItem("ssb.theme") || "light"; } catch (_) { return "light"; } })());
 

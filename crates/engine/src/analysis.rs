@@ -349,95 +349,130 @@ fn temporal(r: &mut VoiceReport, pt: &pitch::Pitch, it: &intensity::Intensity) {
 }
 
 fn write_report(r: &mut VoiceReport) {
+    localize(r, false);
+}
+
+/// (Re)write the findings and the clinical report text in Croatian or English.
+pub fn localize(r: &mut VoiceReport, en: bool) {
     use std::fmt::Write;
-    let mut s = String::from("KLINIČKI IZVJEŠTAJ — AKUSTIČKA ANALIZA GLASA\n");
+    let l = |hr: &'static str, e: &'static str| if en { e } else { hr };
+    if r.duration < 0.1 && r.f0_mean.is_none() && r.pulses == 0 {
+        let m = l("Odabir je prekratak za analizu (minimalno 100 ms).", "The selection is too short to analyse (at least 100 ms).").to_string();
+        r.findings = vec![m.clone()];
+        r.report = m;
+        return;
+    }
+    let mut s = String::from(l("KLINIČKI IZVJEŠTAJ — AKUSTIČKA ANALIZA GLASA\n", "CLINICAL REPORT — ACOUSTIC VOICE ANALYSIS\n"));
     let o = |v: Option<f32>, d: usize| v.map(|x| format!("{x:.d$}")).unwrap_or_else(|| "—".into());
     let st = &r.settings;
     let _ = writeln!(
         s,
-        "(algoritmi Praat · raspon F0 {:.0}–{:.0} Hz · maks. formant {:.0} Hz)\n",
-        st.pitch_floor, st.pitch_ceiling, st.max_formant
+        "{}\n",
+        if en {
+            format!("(Praat algorithms · F0 range {:.0}–{:.0} Hz · maximum formant {:.0} Hz)", st.pitch_floor, st.pitch_ceiling, st.max_formant)
+        } else {
+            format!("(algoritmi Praat · raspon F0 {:.0}–{:.0} Hz · maks. formant {:.0} Hz)", st.pitch_floor, st.pitch_ceiling, st.max_formant)
+        }
     );
-    let _ = writeln!(s, "Trajanje odabira: {:.2} s · zvučni dio: {:.0} %", r.duration, r.voiced_fraction * 100.0);
-    s.push_str("\nVISINA (F0):\n");
-    let _ = writeln!(
-        s,
-        "➤ F0 srednja {} Hz · medijan {} Hz · SD {} Hz · raspon {}–{} Hz ({} polutonova, 5.–95. pct.)",
-        o(r.f0_mean, 1), o(r.f0_median, 1), o(r.f0_sd, 1), o(r.f0_min, 1), o(r.f0_max, 1), o(r.f0_range_st, 1)
-    );
-    s.push_str("\nPULSEVI I ZVUČNOST:\n");
-    let _ = writeln!(s, "➤ Pulsevi: {} · periode: {} · srednja perioda {} ms (SD {} ms)", r.pulses, r.periods, o(r.mean_period_ms, 3), o(r.sd_period_ms, 3));
-    let _ = writeln!(s, "➤ Udio lokalno bezvučnih okvira: {:.1} %", r.unvoiced_fraction);
-    let _ = writeln!(s, "➤ Prekidi zvučnosti: {} (stupanj {:.1} %)", r.voice_breaks, r.voice_break_degree);
-    s.push_str("\nJITTER:\n");
-    let _ = writeln!(s, "➤ Jitter (local): {} %   [norma < {JITTER_MAX} %]", o(r.jitter_local, 3));
-    let _ = writeln!(s, "➤ Jitter (local, abs): {} µs · RAP {} % · PPQ5 {} % · DDP {} %", o(r.jitter_abs_us, 1), o(r.jitter_rap, 3), o(r.jitter_ppq5, 3), o(r.jitter_ddp, 3));
-    s.push_str("\nSHIMMER:\n");
-    let _ = writeln!(s, "➤ Shimmer (local): {} %   [norma < {SHIMMER_MAX} %]", o(r.shimmer_local, 3));
-    let _ = writeln!(s, "➤ Shimmer (local, dB): {} dB   [norma < {SHIMMER_DB_MAX} dB]", o(r.shimmer_db, 3));
-    let _ = writeln!(s, "➤ APQ3 {} % · APQ5 {} % · APQ11 {} % · DDA {} %", o(r.shimmer_apq3, 3), o(r.shimmer_apq5, 3), o(r.shimmer_apq11, 3), o(r.shimmer_dda, 3));
-    s.push_str("\nHARMONIČNOST I SPEKTAR:\n");
-    let _ = writeln!(s, "➤ HNR: {} dB   [norma > {HNR_MIN} dB] · NHR {} · srednja autokorelacija {}", o(r.hnr_db, 2), o(r.nhr, 4), o(r.mean_autocorrelation, 4));
-    let _ = writeln!(s, "➤ CPPS: {} dB{}", o(r.cpps, 2), r.cpps_note.as_ref().map(|n| format!(" ({n})")).unwrap_or_default());
-    let _ = writeln!(s, "➤ Formanti (medijan, zvučni okviri): F1 {} · F2 {} · F3 {} · F4 {} Hz", o(r.formants[0], 0), o(r.formants[1], 0), o(r.formants[2], 0), o(r.formants[3], 0));
-    s.push_str("\nINTENZITET (Praat skala, nekalibrirano):\n");
-    let _ = writeln!(
-        s,
-        "➤ Srednji {} dB · min {} · maks {} · SD {} dB · zvučni dio {} dBFS",
-        o(r.intensity_mean_db, 1), o(r.intensity_min_db, 1), o(r.intensity_max_db, 1), o(r.intensity_sd_db, 1), o(r.intensity_dbfs, 1)
-    );
-    s.push_str("\nVREMENSKI PARAMETRI / TEČNOST:\n");
-    let _ = writeln!(s, "➤ Najduža neprekinuta fonacija: {:.2} s", r.max_voiced_s);
-    let _ = writeln!(s, "➤ Pauze ≥ 250 ms: {} (prosjek {:.2} s, {:.1} % trajanja)", r.pauses, r.pause_mean_s, r.pause_ratio);
-    let _ = writeln!(
-        s,
-        "➤ Slogovne jezgre: {} · brzina govora {:.2} slog/s · brzina artikulacije {:.2} slog/s",
-        r.syllable_nuclei, r.speech_rate, r.articulation_rate
-    );
+    if en {
+        let _ = writeln!(s, "Selection duration: {:.2} s · voiced part: {:.0} %", r.duration, r.voiced_fraction * 100.0);
+        s.push_str("\nPITCH (F0):\n");
+        let _ = writeln!(s, "➤ F0 mean {} Hz · median {} Hz · SD {} Hz · range {}–{} Hz ({} semitones, 5th–95th pct.)", o(r.f0_mean, 1), o(r.f0_median, 1), o(r.f0_sd, 1), o(r.f0_min, 1), o(r.f0_max, 1), o(r.f0_range_st, 1));
+        s.push_str("\nPULSES AND VOICING:\n");
+        let _ = writeln!(s, "➤ Pulses: {} · periods: {} · mean period {} ms (SD {} ms)", r.pulses, r.periods, o(r.mean_period_ms, 3), o(r.sd_period_ms, 3));
+        let _ = writeln!(s, "➤ Fraction of locally unvoiced frames: {:.1} %", r.unvoiced_fraction);
+        let _ = writeln!(s, "➤ Voice breaks: {} (degree {:.1} %)", r.voice_breaks, r.voice_break_degree);
+        s.push_str("\nJITTER:\n");
+        let _ = writeln!(s, "➤ Jitter (local): {} %   [norm < {JITTER_MAX} %]", o(r.jitter_local, 3));
+        let _ = writeln!(s, "➤ Jitter (local, abs): {} µs · RAP {} % · PPQ5 {} % · DDP {} %", o(r.jitter_abs_us, 1), o(r.jitter_rap, 3), o(r.jitter_ppq5, 3), o(r.jitter_ddp, 3));
+        s.push_str("\nSHIMMER:\n");
+        let _ = writeln!(s, "➤ Shimmer (local): {} %   [norm < {SHIMMER_MAX} %]", o(r.shimmer_local, 3));
+        let _ = writeln!(s, "➤ Shimmer (local, dB): {} dB   [norm < {SHIMMER_DB_MAX} dB]", o(r.shimmer_db, 3));
+        let _ = writeln!(s, "➤ APQ3 {} % · APQ5 {} % · APQ11 {} % · DDA {} %", o(r.shimmer_apq3, 3), o(r.shimmer_apq5, 3), o(r.shimmer_apq11, 3), o(r.shimmer_dda, 3));
+        s.push_str("\nHARMONICITY AND SPECTRUM:\n");
+        let _ = writeln!(s, "➤ HNR: {} dB   [norm > {HNR_MIN} dB] · NHR {} · mean autocorrelation {}", o(r.hnr_db, 2), o(r.nhr, 4), o(r.mean_autocorrelation, 4));
+        let _ = writeln!(s, "➤ CPPS: {} dB{}", o(r.cpps, 2), if r.cpps_note.is_some() { " (computed on the first 60 s of the selection)".to_string() } else { String::new() });
+        let _ = writeln!(s, "➤ Formants (median, voiced frames): F1 {} · F2 {} · F3 {} · F4 {} Hz", o(r.formants[0], 0), o(r.formants[1], 0), o(r.formants[2], 0), o(r.formants[3], 0));
+        s.push_str("\nINTENSITY (Praat scale, uncalibrated):\n");
+        let _ = writeln!(s, "➤ Mean {} dB · min {} · max {} · SD {} dB · voiced part {} dBFS", o(r.intensity_mean_db, 1), o(r.intensity_min_db, 1), o(r.intensity_max_db, 1), o(r.intensity_sd_db, 1), o(r.intensity_dbfs, 1));
+        s.push_str("\nTIMING / FLUENCY:\n");
+        let _ = writeln!(s, "➤ Longest uninterrupted phonation: {:.2} s", r.max_voiced_s);
+        let _ = writeln!(s, "➤ Pauses ≥ 250 ms: {} (mean {:.2} s, {:.1} % of the duration)", r.pauses, r.pause_mean_s, r.pause_ratio);
+        let _ = writeln!(s, "➤ Syllable nuclei: {} · speech rate {:.2} syll/s · articulation rate {:.2} syll/s", r.syllable_nuclei, r.speech_rate, r.articulation_rate);
+    } else {
+        let _ = writeln!(s, "Trajanje odabira: {:.2} s · zvučni dio: {:.0} %", r.duration, r.voiced_fraction * 100.0);
+        s.push_str("\nVISINA (F0):\n");
+        let _ = writeln!(s, "➤ F0 srednja {} Hz · medijan {} Hz · SD {} Hz · raspon {}–{} Hz ({} polutonova, 5.–95. pct.)", o(r.f0_mean, 1), o(r.f0_median, 1), o(r.f0_sd, 1), o(r.f0_min, 1), o(r.f0_max, 1), o(r.f0_range_st, 1));
+        s.push_str("\nPULSEVI I ZVUČNOST:\n");
+        let _ = writeln!(s, "➤ Pulsevi: {} · periode: {} · srednja perioda {} ms (SD {} ms)", r.pulses, r.periods, o(r.mean_period_ms, 3), o(r.sd_period_ms, 3));
+        let _ = writeln!(s, "➤ Udio lokalno bezvučnih okvira: {:.1} %", r.unvoiced_fraction);
+        let _ = writeln!(s, "➤ Prekidi zvučnosti: {} (stupanj {:.1} %)", r.voice_breaks, r.voice_break_degree);
+        s.push_str("\nJITTER:\n");
+        let _ = writeln!(s, "➤ Jitter (local): {} %   [norma < {JITTER_MAX} %]", o(r.jitter_local, 3));
+        let _ = writeln!(s, "➤ Jitter (local, abs): {} µs · RAP {} % · PPQ5 {} % · DDP {} %", o(r.jitter_abs_us, 1), o(r.jitter_rap, 3), o(r.jitter_ppq5, 3), o(r.jitter_ddp, 3));
+        s.push_str("\nSHIMMER:\n");
+        let _ = writeln!(s, "➤ Shimmer (local): {} %   [norma < {SHIMMER_MAX} %]", o(r.shimmer_local, 3));
+        let _ = writeln!(s, "➤ Shimmer (local, dB): {} dB   [norma < {SHIMMER_DB_MAX} dB]", o(r.shimmer_db, 3));
+        let _ = writeln!(s, "➤ APQ3 {} % · APQ5 {} % · APQ11 {} % · DDA {} %", o(r.shimmer_apq3, 3), o(r.shimmer_apq5, 3), o(r.shimmer_apq11, 3), o(r.shimmer_dda, 3));
+        s.push_str("\nHARMONIČNOST I SPEKTAR:\n");
+        let _ = writeln!(s, "➤ HNR: {} dB   [norma > {HNR_MIN} dB] · NHR {} · srednja autokorelacija {}", o(r.hnr_db, 2), o(r.nhr, 4), o(r.mean_autocorrelation, 4));
+        let _ = writeln!(s, "➤ CPPS: {} dB{}", o(r.cpps, 2), r.cpps_note.as_ref().map(|n| format!(" ({n})")).unwrap_or_default());
+        let _ = writeln!(s, "➤ Formanti (medijan, zvučni okviri): F1 {} · F2 {} · F3 {} · F4 {} Hz", o(r.formants[0], 0), o(r.formants[1], 0), o(r.formants[2], 0), o(r.formants[3], 0));
+        s.push_str("\nINTENZITET (Praat skala, nekalibrirano):\n");
+        let _ = writeln!(s, "➤ Srednji {} dB · min {} · maks {} · SD {} dB · zvučni dio {} dBFS", o(r.intensity_mean_db, 1), o(r.intensity_min_db, 1), o(r.intensity_max_db, 1), o(r.intensity_sd_db, 1), o(r.intensity_dbfs, 1));
+        s.push_str("\nVREMENSKI PARAMETRI / TEČNOST:\n");
+        let _ = writeln!(s, "➤ Najduža neprekinuta fonacija: {:.2} s", r.max_voiced_s);
+        let _ = writeln!(s, "➤ Pauze ≥ 250 ms: {} (prosjek {:.2} s, {:.1} % trajanja)", r.pauses, r.pause_mean_s, r.pause_ratio);
+        let _ = writeln!(s, "➤ Slogovne jezgre: {} · brzina govora {:.2} slog/s · brzina artikulacije {:.2} slog/s", r.syllable_nuclei, r.speech_rate, r.articulation_rate);
+    }
 
     let mut f = vec![];
     let mut bad = false;
     if r.voiced_fraction < 0.2 || r.f0_mean.is_none() {
-        f.push("Nije detektirana stabilna fonacija — radi li se o šaptu, tišini ili bezvučnim glasovima? Provjerite i raspon F0 u postavkama analize.".to_string());
+        f.push(l("Nije detektirana stabilna fonacija — radi li se o šaptu, tišini ili bezvučnim glasovima? Provjerite i raspon F0 u postavkama analize.",
+                 "No stable phonation detected — is this whisper, silence or voiceless sounds? Also check the F0 range in the analysis settings.").to_string());
         bad = true;
     } else {
         if let Some(m) = r.f0_mean {
             if !(70.0..=300.0).contains(&m) {
-                f.push(format!("F0 ({m:.0} Hz) izvan uobičajenog raspona govornog glasa (70–300 Hz)."));
+                f.push(if en { format!("F0 ({m:.0} Hz) outside the usual range of the speaking voice (70–300 Hz).") } else { format!("F0 ({m:.0} Hz) izvan uobičajenog raspona govornog glasa (70–300 Hz).") });
             }
         }
         if let Some(j) = r.jitter_local {
             if j > JITTER_MAX {
-                f.push(format!("Povišen jitter ({j:.2} % > {JITTER_MAX} %): aperiodičnost titranja glasnica, smanjena kontrola (hrapavost)."));
+                f.push(if en { format!("Raised jitter ({j:.2} % > {JITTER_MAX} %): aperiodic vocal fold vibration, reduced control (roughness).") } else { format!("Povišen jitter ({j:.2} % > {JITTER_MAX} %): aperiodičnost titranja glasnica, smanjena kontrola (hrapavost).") });
                 bad = true;
             }
         }
         if let Some(v) = r.shimmer_local {
             if v > SHIMMER_MAX {
-                f.push(format!("Povišen shimmer ({v:.2} % > {SHIMMER_MAX} %): nestabilnost amplitude, promjene glotalnog otpora (šumnost, hukavost)."));
+                f.push(if en { format!("Raised shimmer ({v:.2} % > {SHIMMER_MAX} %): amplitude instability, changing glottal resistance (noisiness, breathiness).") } else { format!("Povišen shimmer ({v:.2} % > {SHIMMER_MAX} %): nestabilnost amplitude, promjene glotalnog otpora (šumnost, hukavost).") });
                 bad = true;
             }
         }
         if let Some(h) = r.hnr_db {
             if h < HNR_MIN {
-                f.push(format!("Snižen HNR ({h:.1} dB < {HNR_MIN} dB): značajan udio šuma u glasu (disfonija)."));
+                f.push(if en { format!("Lowered HNR ({h:.1} dB < {HNR_MIN} dB): a considerable noise component in the voice (dysphonia).") } else { format!("Snižen HNR ({h:.1} dB < {HNR_MIN} dB): značajan udio šuma u glasu (disfonija).") });
                 bad = true;
             }
         }
         if r.jitter_local.is_none() {
-            f.push("Premalo stabilnih perioda za jitter/shimmer — snimite produženi vokal /a/ 3–5 s.".into());
+            f.push(l("Premalo stabilnih perioda za jitter/shimmer — snimite produženi vokal /a/ 3–5 s.", "Too few stable periods for jitter/shimmer — record a sustained vowel /a/ of 3–5 s.").to_string());
         }
     }
-    s.push_str("\nZAKLJUČAK:\n");
+    s.push_str(l("\nZAKLJUČAK:\n", "\nCONCLUSION:\n"));
     if f.is_empty() {
-        s.push_str("- NALAZ UREDAN: parametri titranja glasnica su unutar referentnih kliničkih granica.\n");
+        s.push_str(l("- NALAZ UREDAN: parametri titranja glasnica su unutar referentnih kliničkih granica.\n", "- NORMAL FINDING: vocal fold vibration parameters are within the clinical reference limits.\n"));
     }
     for x in &f {
         let _ = writeln!(s, "- {x}");
     }
-    s.push_str("\nNapomena: mjere izračunate algoritmima Praata (P. Boersma i D. Weenink), provjereno \
+    s.push_str(l("\nNapomena: mjere izračunate algoritmima Praata (P. Boersma i D. Weenink), provjereno \
                 podudaranje s Praatom 7. Orijentacijski nalaz, nije medicinska dijagnoza. Norme vrijede \
-                za produženi vokal /a/ 3–5 s, stalnu udaljenost mikrofona i tihu prostoriju.\n");
+                za produženi vokal /a/ 3–5 s, stalnu udaljenost mikrofona i tihu prostoriju.\n",
+                "\nNote: measures computed with Praat's algorithms (P. Boersma and D. Weenink), verified \
+                against Praat 7. An orientation finding, not a medical diagnosis. Norms apply to a \
+                sustained vowel /a/ of 3–5 s, a constant microphone distance and a quiet room.\n"));
     r.normal = !bad && f.is_empty();
     r.findings = f;
     r.report = s;

@@ -22,6 +22,7 @@
   <button id="btnPresets"><span data-ic="bookmark"></span>Presets</button>
   <button id="btnAi" title="AI provider settings">AI</button>
   <button id="btnAudio"><span data-ic="settings"></span>Audio</button>
+  <select id="langSel" title="Jezik / Language" aria-label="Jezik / Language" data-noi18n><option value="hr">HR</option><option value="en">EN</option></select>
   <button id="btnTheme" class="icon" title="Svijetla / tamna tema"><span data-ic="sun"></span></button>
 </header>
 
@@ -207,8 +208,8 @@
                   <div class="menu"><button id="anExportBtn"><span data-ic="download"></span>Izvoz ▾</button>
                     <div class="menu-list hidden" id="anExportMenu">
                       <button data-x="csv">Mjere (CSV)</button><button data-x="praat">Voice report (tekst, Praat oblik)</button>
-                      <button data-x="pitch">Pitch listing (CSV)</button><button data-x="formant">Formant listing (CSV)</button>
-                      <button data-x="intensity">Intenzitet listing (CSV)</button><button data-x="pulses">Pulsevi (CSV)</button>
+                      <button data-x="pitch">Visina tona (CSV)</button><button data-x="formant">Formanti (CSV)</button>
+                      <button data-x="intensity">Intenzitet (CSV)</button><button data-x="pulses">Pulsevi (CSV)</button>
                       <button data-x="png">Slika editora (PNG)</button><button data-x="txt">Nalaz (.txt)</button>
                     </div></div>
                   <a id="anWav" class="btn" title="Preuzmi WAV"><span data-ic="file-audio"></span>WAV</a>
@@ -392,6 +393,7 @@
 </div>
 
 <div id="toast"></div>
+<script src="i18n.js"></script>
 <script src="icons.js"></script>
 <script src="app.js"></script>
 <script src="sono.js"></script>

@@ -200,8 +200,33 @@ pub const ANNOTATION_KINDS: &[(&str, &str, bool)] = &[
     ("ostalo", "Ostalo", false),
 ];
 
+/// English labels, same order and ids as `ANNOTATION_KINDS`.
+pub const ANNOTATION_KINDS_EN: &[(&str, &str)] = &[
+    ("blok", "Block"),
+    ("produljenje", "Sound prolongation"),
+    ("ponavljanje_glasa", "Sound repetition"),
+    ("ponavljanje_sloga", "Syllable repetition"),
+    ("ponavljanje_rijeci", "Monosyllabic word repetition"),
+    ("umetak", "Interjection / filler"),
+    ("revizija", "Revision / broken word"),
+    ("tvrdi_pocetak", "Hard glottal onset"),
+    ("prekid_glasa", "Voice break / pitch break"),
+    ("sapat", "Whisper / aphonia"),
+    ("pratece", "Secondary behaviour"),
+    ("ostalo", "Other"),
+];
+
 pub fn kind_label(kind: &str) -> &str {
     ANNOTATION_KINDS.iter().find(|k| k.0 == kind).map(|k| k.1).unwrap_or(kind)
+}
+
+pub fn kind_label_en(kind: &str) -> &str {
+    ANNOTATION_KINDS_EN.iter().find(|k| k.0 == kind).map(|k| k.1).unwrap_or(kind)
+}
+
+/// English label for a Croatian label (summaries store the Croatian one).
+pub fn kind_label_en_of(label: &str) -> &str {
+    ANNOTATION_KINDS.iter().find(|k| k.1 == label).map(|k| kind_label_en(k.0)).unwrap_or(label)
 }
 
 /// Disfluency summary of a recording's annotations.
@@ -255,7 +280,8 @@ fn tg_escape(t: &str) -> String {
 }
 
 /// Praat TextGrid (long text format). Overlapping labels go to extra tiers.
-pub fn textgrid(rec: &Recording) -> String {
+pub fn textgrid(rec: &Recording, en: bool) -> String {
+    let label = |k: &str| if en { kind_label_en(k).to_string() } else { kind_label(k).to_string() };
     use std::fmt::Write;
     let dur = rec.duration.max(rec.annotations.iter().fold(0.0, |m, a| m.max(a.end))) as f64;
     let mut anns: Vec<&Annotation> = rec.annotations.iter().filter(|a| a.end > a.start).collect();
@@ -285,14 +311,15 @@ pub fn textgrid(rec: &Recording) -> String {
             if a0 > t {
                 iv.push((t, a0, String::new()));
             }
-            let text = if a.text.is_empty() { kind_label(&a.kind).to_string() } else { format!("{}: {}", kind_label(&a.kind), a.text) };
+            let text = if a.text.is_empty() { label(&a.kind) } else { format!("{}: {}", label(&a.kind), a.text) };
             iv.push((a0.max(t), a1, text));
             t = a1;
         }
         if t < dur {
             iv.push((t, dur, String::new()));
         }
-        let name = if ti == 0 { "disfluencije".to_string() } else { format!("disfluencije {}", ti + 1) };
+        let base = if en { "disfluencies" } else { "disfluencije" };
+        let name = if ti == 0 { base.to_string() } else { format!("{base} {}", ti + 1) };
         let _ = write!(
             s,
             "    item [{}]:\n        class = \"IntervalTier\" \n        name = \"{name}\" \n        xmin = 0 \n        xmax = {dur} \n        intervals: size = {} \n",
@@ -448,7 +475,7 @@ mod tests {
     #[test]
     fn textgrid_splits_overlaps() {
         let r = rec_with(vec![(1.0, 3.0, "blok"), (2.0, 2.5, "pratece"), (5.0, 6.0, "umetak")]);
-        let tg = textgrid(&r);
+        let tg = textgrid(&r, false);
         assert!(tg.starts_with("File type = \"ooTextFile\""));
         assert!(tg.contains("size = 2"), "{tg}");
         assert!(tg.contains("text = \"Blok\""));

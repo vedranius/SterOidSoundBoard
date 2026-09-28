@@ -16,7 +16,7 @@ const Editor = (() => {
     umetak: "#3e63dd", revizija: "#0090ff", tvrdi_pocetak: "#12a594", prekid_glasa: "#ffc53d", sapat: "#8e8c99", pratece: "#7c66dc", ostalo: "#6e7b8a" };
   let KINDS = [];
   async function kinds() { if (!KINDS.length) KINDS = await api("GET", "/api/clinic/annotation-kinds"); return KINDS; }
-  const kindLabel = (k) => (KINDS.find((x) => x.id === k) || { label: k }).label;
+  const kindLabel = (k) => { const x = KINDS.find((x) => x.id === k); return !x ? k : I18N.lang === "en" && x.label_en ? x.label_en : x.label; };
   const uid = () => "a" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 
   class SoundEditor {
@@ -431,7 +431,7 @@ const Editor = (() => {
       return new Promise((resolve) => {
         const dlg = document.createElement("div"); dlg.className = "modal"; dlg.style.zIndex = 70;
         dlg.innerHTML = `<form class="modal-in card2 small-dlg"><h3>${title}</h3>
-          <label>Vrsta <select name="kind">${KINDS.map((k) => `<option value="${k.id}">${k.label}${k.sld ? " (SLD)" : ""}</option>`).join("")}</select></label>
+          <label>Vrsta <select name="kind">${KINDS.map((k) => `<option value="${k.id}">${kindLabel(k.id)}${k.sld ? " (SLD)" : ""}</option>`).join("")}</select></label>
           <label>Napomena <input name="text" maxlength="500" placeholder="npr. glas /p/, 3 ponavljanja"></label>
           <div class="dim small">${a.start.toFixed(3)}–${a.end.toFixed(3)} s (${(a.end - a.start).toFixed(3)} s)</div>
           <div class="row"><button class="pri" type="submit">Spremi</button><button type="button" data-x>Odustani</button><span class="grow"></span>${a.id ? '<button type="button" class="danger" data-del>Obriši</button>' : ""}</div></form>`;

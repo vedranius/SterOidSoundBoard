@@ -33,11 +33,12 @@ const spec = (role, id) => { const n = node(role); return n && TYPES[n.kind].par
 const pval = (role, id) => { const n = node(role); if (!n) return 0; const s = spec(role, id); return n.params[id] ?? (s ? s.default : 0); };
 const setP = (role, id, v) => { const n = node(role); if (n) setParam(n.id, id, v); };
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
-const fmtTime = (ms) => new Date(ms).toLocaleString("hr-HR", { dateStyle: "short", timeStyle: "short" });
-const fmtDate = (ms) => new Date(ms).toLocaleDateString("hr-HR");
+const fmtTime = (ms) => new Date(ms).toLocaleString(I18N.locale, { dateStyle: "short", timeStyle: "short" });
+const yrs = (a) => a + (I18N.lang === "en" ? " y" : " god.");
+const fmtDate = (ms) => new Date(ms).toLocaleDateString(I18N.locale);
 const fmtDur = (s) => { s = Math.max(0, Math.round(s)); const h = Math.floor(s / 3600), m = Math.floor(s / 60) % 60, x = s % 60; return (h ? h + ":" : "") + String(m).padStart(2, "0") + ":" + String(x).padStart(2, "0"); };
 const esc = (t) => String(t ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-const num = (v, d) => (v == null || !isFinite(v) ? "—" : v.toFixed(d).replace(".", ","));
+const num = (v, d) => (v == null || !isFinite(v) ? "—" : I18N.dec(v.toFixed(d)));
 const fold = (t) => String(t || "").toLowerCase().replace(/đ/g, "d").normalize("NFD").replace(/[̀-ͯ]/g, "");
 const initials = (name) => String(name || "?").trim().split(/\s+/).slice(0, 2).map((w) => w[0]).join("").toUpperCase();
 const lsGet = (k, d) => { try { return localStorage.getItem(k) ?? d; } catch (_) { return d; } };
@@ -76,7 +77,7 @@ function renderPList() {
     const d = el("div", "pitem" + (st.patient?.id === p.id ? " sel" : ""));
     d.tabIndex = 0; d.setAttribute("role", "option"); d.dataset.id = p.id;
     const age = ageOf(p.birth);
-    const meta = [p.code, age != null ? age + " god." : null, p.sex || null].filter(Boolean).map(esc).join(" · ");
+    const meta = [p.code, age != null ? yrs(age) : null, p.sex || null].filter(Boolean).map(esc).join(" · ");
     d.innerHTML = `<span class="avatar">${esc(initials(p.name))}</span><div class="grow"><div class="pn">${esc(p.name)}</div>` +
       (meta ? `<div class="small dim">${meta}</div>` : "") +
       `<div class="small dim">${last[p.id] ? "Zadnja sesija: " + fmtDate(last[p.id]) : "Bez sesija"}</div></div>` +
@@ -121,7 +122,7 @@ function openForm(p) {
   showAge(); $("#pModal").classList.remove("hidden"); f.name.focus();
 }
 function closeForm() { $("#pModal").classList.add("hidden"); }
-function showAge() { const a = ageOf($("#clPForm").birth.value); $("#pAge").textContent = a == null ? "" : `${a} god.`; }
+function showAge() { const a = ageOf($("#clPForm").birth.value); $("#pAge").textContent = a == null ? "" : yrs(a); }
 $("#clPForm").birth.oninput = showAge;
 $("#clNewP").onclick = () => openForm(null);
 $("#clEditP").onclick = () => (st.patient ? openForm(st.patient) : toast("Odaberite pacijenta"));
@@ -151,7 +152,7 @@ function renderPCard() {
   if (!p) return;
   $("#clPName").textContent = p.name + (p.code ? ` (${p.code})` : "");
   const age = ageOf(p.birth);
-  const bits = [age != null ? age + " god." : null, p.sex || null, p.diagnosis || null].filter(Boolean).map(esc).join(" · ");
+  const bits = [age != null ? yrs(age) : null, p.sex || null, p.diagnosis || null].filter(Boolean).map(esc).join(" · ");
   $("#clPSummary").innerHTML = (bits ? `<div>${bits}</div>` : "") + (p.complaint ? `<div class="clip" title="${esc(p.complaint)}">${esc(p.complaint)}</div>` : "") +
     `<div>${p.ai_consent ? "✓ suglasnost za AI" : "✗ nema suglasnosti za AI"}</div>`;
 }
@@ -170,8 +171,8 @@ async function loadPatientData() {
 
 // ============================================================ sessions (sidebar: current session + history)
 let timerH = 0;
-const fmtClock = (ms) => new Date(ms).toLocaleTimeString("hr-HR", { hour: "2-digit", minute: "2-digit" });
-const fmtLongDate = (ms) => new Date(ms).toLocaleDateString("hr-HR", { day: "numeric", month: "short", year: "numeric" });
+const fmtClock = (ms) => new Date(ms).toLocaleTimeString(I18N.locale, { hour: "2-digit", minute: "2-digit" });
+const fmtLongDate = (ms) => new Date(ms).toLocaleDateString(I18N.locale, { day: "numeric", month: "short", year: "numeric" });
 function sessionRecs(s) { return st.recs.filter((r) => r.session_id === s.id); }
 function renderSession() {
   const a = st.active, mine = a && st.patient && a.patient_id === st.patient.id;
@@ -823,20 +824,20 @@ function measureRows(r) {
     ["Zvučnost (Voicing)"],
     ["Udio nezvučnih okvira", f(r.unvoiced_fraction, 1), "%"], ["Broj prekida zvučnosti", r.voice_breaks, ""], ["Stupanj prekida zvučnosti", f(r.voice_break_degree, 1), "%"],
     ["Jitter"],
-    ["Jitter (local)", f(r.jitter_local, 3), "%", "< 1,04", chk(r.jitter_local, r.jitter_local <= 1.04)],
-    ["Jitter (local, absolute)", f(r.jitter_abs_us, 2), "µs", "< 83,2", chk(r.jitter_abs_us, r.jitter_abs_us <= 83.2)],
-    ["Jitter (rap)", f(r.jitter_rap, 3), "%", "< 0,68", chk(r.jitter_rap, r.jitter_rap <= 0.68)],
-    ["Jitter (ppq5)", f(r.jitter_ppq5, 3), "%", "< 0,84", chk(r.jitter_ppq5, r.jitter_ppq5 <= 0.84)],
+    ["Jitter (local)", f(r.jitter_local, 3), "%", "< " + I18N.dec("1.04"), chk(r.jitter_local, r.jitter_local <= 1.04)],
+    ["Jitter (local, absolute)", f(r.jitter_abs_us, 2), "µs", "< " + I18N.dec("83.2"), chk(r.jitter_abs_us, r.jitter_abs_us <= 83.2)],
+    ["Jitter (rap)", f(r.jitter_rap, 3), "%", "< " + I18N.dec("0.68"), chk(r.jitter_rap, r.jitter_rap <= 0.68)],
+    ["Jitter (ppq5)", f(r.jitter_ppq5, 3), "%", "< " + I18N.dec("0.84"), chk(r.jitter_ppq5, r.jitter_ppq5 <= 0.84)],
     ["Jitter (ddp)", f(r.jitter_ddp, 3), "%"],
     ["Shimmer"],
-    ["Shimmer (local)", f(r.shimmer_local, 3), "%", "< 3,81", chk(r.shimmer_local, r.shimmer_local <= 3.81)],
-    ["Shimmer (local, dB)", f(r.shimmer_db, 3), "dB", "< 0,35", chk(r.shimmer_db, r.shimmer_db <= 0.35)],
+    ["Shimmer (local)", f(r.shimmer_local, 3), "%", "< " + I18N.dec("3.81"), chk(r.shimmer_local, r.shimmer_local <= 3.81)],
+    ["Shimmer (local, dB)", f(r.shimmer_db, 3), "dB", "< " + I18N.dec("0.35"), chk(r.shimmer_db, r.shimmer_db <= 0.35)],
     ["Shimmer (apq3)", f(r.shimmer_apq3, 3), "%"], ["Shimmer (apq5)", f(r.shimmer_apq5, 3), "%"],
-    ["Shimmer (apq11)", f(r.shimmer_apq11, 3), "%", "< 3,07", chk(r.shimmer_apq11, r.shimmer_apq11 <= 3.07)],
+    ["Shimmer (apq11)", f(r.shimmer_apq11, 3), "%", "< " + I18N.dec("3.07"), chk(r.shimmer_apq11, r.shimmer_apq11 <= 3.07)],
     ["Shimmer (dda)", f(r.shimmer_dda, 3), "%"],
     ["Harmoničnost (Harmonicity)"],
     ["Srednja autokorelacija", f(r.mean_autocorrelation, 4), ""],
-    ["Omjer šum/harmonici (NHR)", f(r.nhr, 4), "", "< 0,19", chk(r.nhr, r.nhr <= 0.19)],
+    ["Omjer šum/harmonici (NHR)", f(r.nhr, 4), "", "< " + I18N.dec("0.19"), chk(r.nhr, r.nhr <= 0.19)],
     ["Omjer harmonici/šum (HNR)", f(r.hnr_db, 2), "dB", "> 20", chk(r.hnr_db, r.hnr_db >= 20)],
     ["Kepstralna analiza"],
     ["CPPS (AVQI postavke)", f(r.cpps, 2), "dB", r.cpps_note ? "*" : ""],
@@ -868,9 +869,9 @@ async function openAnalysis(r) {
   $("#anArea").classList.remove("hidden");
   const sess = r.session_id && st.sessions.find((s) => s.id === r.session_id);
   $("#anTitle").textContent = `${recTitle(r)}${r.label && r.task ? " — " + r.label : ""}`;
-  $("#anSubtitle").textContent = [st.patient && r.patient_id === st.patient.id ? st.patient.name : null, fmtTime(r.created), `${num(r.duration, 2)} s`, `${r.sample_rate} Hz`, SRC[r.source] || r.source, sess ? "sesija " + fmtDate(sess.start) : null].filter(Boolean).join(" · ");
+  $("#anSubtitle").textContent = [st.patient && r.patient_id === st.patient.id ? st.patient.name : null, fmtTime(r.created), `${num(r.duration, 2)} s`, `${r.sample_rate} Hz`, t(SRC[r.source] || r.source), sess ? t("sesija") + " " + fmtDate(sess.start) : null].filter(Boolean).join(" · ");
   $("#anWav").href = `/api/recordings/${r.id}/wav`; $("#anWav").download = "";
-  $("#anTg").href = `/api/recordings/${r.id}/textgrid`; $("#anTg").download = "";
+  $("#anTg").href = `/api/recordings/${r.id}/textgrid?lang=${I18N.lang}`; $("#anTg").download = "";
   $("#anReport").value = "Učitavanje…"; $("#anTiles").innerHTML = ""; $("#anMeasures").innerHTML = ""; $("#anSummary").innerHTML = ""; $("#anSelInfo").textContent = "";
   fillTasks($("#anTask"), r.task); $("#anNotes").value = r.notes || ""; $("#anSyl").value = r.syllables || "";
   $("#anAiOut").innerHTML = ""; $("#anAiPrompt").classList.add("hidden"); $("#anAiQ").value = "";
@@ -884,7 +885,7 @@ async function openAnalysis(r) {
   an.editor.settingsForm($("#anSettingsHost"));
   $("#anCard").scrollIntoView({ behavior: "smooth", block: "start" });
   try { await an.editor.load(); await runAnalysis([0, an.editor.dur]); renderAnnList(); }
-  catch (e) { $("#anReport").value = "Greška: " + e.message; }
+  catch (e) { $("#anReport").value = t("Greška:") + " " + e.message; }
 }
 function closeAnalysis(silent) {
   if (an.editor) { an.editor.destroy(); an.editor = null; }
@@ -957,7 +958,7 @@ function renderAnnList() {
 function download(name, text, type = "text/plain;charset=utf-8") {
   const a = document.createElement("a"); a.href = URL.createObjectURL(text instanceof Blob ? text : new Blob([text], { type })); a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1500);
 }
-const baseName = () => `${(st.patient ? st.patient.name : "snimka").replace(/\W+/g, "_")}_${new Date(an.rec.created).toISOString().slice(0, 10)}_${fold(recTitle(an.rec)).replace(/\W+/g, "_")}`;
+const baseName = () => `${(st.patient ? st.patient.name : t("snimka")).replace(/\W+/g, "_")}_${new Date(an.rec.created).toISOString().slice(0, 10)}_${fold(recTitle(an.rec)).replace(/\W+/g, "_")}`;
 const csvNum = (v, d = 6) => (v == null || !isFinite(v) ? "" : String(+v.toFixed(d)));
 $("#anExportBtn").onclick = (e) => { e.stopPropagation(); $("#anExportMenu").classList.toggle("hidden"); };
 document.addEventListener("click", () => $("#anExportMenu").classList.add("hidden"));
@@ -968,12 +969,12 @@ $("#anExportMenu").onclick = (e) => {
   if (["csv", "praat"].includes(x) && !r) return toast("Prvo pokrenite analizu");
   const sel = an.sel || [0, an.rec.duration], inSel = (t) => t >= sel[0] && t <= sel[1];
   switch (x) {
-    case "csv": download(baseName() + "_mjere.csv", "\ufeffmjera;vrijednost;jedinica\n" + measureRows(r).filter((m) => m.length > 1).map((m) => `"${m[0]}";${String(m[1] ?? "").replace(/"/g, "")};${m[2]}`).join("\n"), "text/csv;charset=utf-8"); break;
+    case "csv": download(baseName() + (I18N.lang === "en" ? "_measures.csv" : "_mjere.csv"), (I18N.lang === "en" ? "\ufeffmeasure;value;unit\n" : "\ufeffmjera;vrijednost;jedinica\n") + measureRows(r).filter((m) => m.length > 1).map((m) => `"${t(m[0])}";${String(m[1] ?? "").replace(/"/g, "")};${t(m[2] ?? "")}`).join("\n"), "text/csv;charset=utf-8"); break;
     case "praat": download(baseName() + "_voice_report.txt", praatVoiceReport(r, sel)); break;
     case "pitch": download(baseName() + "_pitch.csv", "time_s,F0_Hz\n" + T.pitch.filter(([t, f]) => f > 0 && inSel(t)).map(([t, f]) => `${csvNum(t)},${csvNum(f, 3)}`).join("\n"), "text/csv"); break;
-    case "formant": download(baseName() + "_formanti.csv", "time_s,F1_Hz,B1_Hz,F2_Hz,B2_Hz,F3_Hz,B3_Hz,F4_Hz,B4_Hz,F5_Hz,B5_Hz\n" + T.formants.filter((f) => inSel(f[0])).map((f) => [csvNum(f[0])].concat([...Array(10)].map((_, k) => (f[k + 1] > 0 ? csvNum(f[k + 1], 1) : ""))).join(",")).join("\n"), "text/csv"); break;
-    case "intensity": download(baseName() + "_intenzitet.csv", "time_s,intensity_dB\n" + T.intensity.filter(([t]) => inSel(t)).map(([t, d]) => `${csvNum(t)},${csvNum(d, 2)}`).join("\n"), "text/csv"); break;
-    case "pulses": download(baseName() + "_pulsevi.csv", "time_s\n" + T.pulses.filter(inSel).map((t) => csvNum(t, 6)).join("\n"), "text/csv"); break;
+    case "formant": download(baseName() + (I18N.lang === "en" ? "_formants.csv" : "_formanti.csv"), "time_s,F1_Hz,B1_Hz,F2_Hz,B2_Hz,F3_Hz,B3_Hz,F4_Hz,B4_Hz,F5_Hz,B5_Hz\n" + T.formants.filter((f) => inSel(f[0])).map((f) => [csvNum(f[0])].concat([...Array(10)].map((_, k) => (f[k + 1] > 0 ? csvNum(f[k + 1], 1) : ""))).join(",")).join("\n"), "text/csv"); break;
+    case "intensity": download(baseName() + (I18N.lang === "en" ? "_intensity.csv" : "_intenzitet.csv"), "time_s,intensity_dB\n" + T.intensity.filter(([t]) => inSel(t)).map(([t, d]) => `${csvNum(t)},${csvNum(d, 2)}`).join("\n"), "text/csv"); break;
+    case "pulses": download(baseName() + (I18N.lang === "en" ? "_pulses.csv" : "_pulsevi.csv"), "time_s\n" + T.pulses.filter(inSel).map((t) => csvNum(t, 6)).join("\n"), "text/csv"); break;
     case "png": { const a = document.createElement("a"); a.href = an.editor.cv.toDataURL("image/png"); a.download = baseName() + "_editor.png"; a.click(); break; }
     case "txt": $("#anSave").click(); break;
   }
@@ -1054,7 +1055,7 @@ async function runAnalysis(sel) {
     show(await api("POST", `/api/recordings/${rec.id}/analyze`, body(true)), false);
   } catch (e) {
     if (seq !== anSeq) return;
-    $("#anReport").value = "Greška: " + e.message; $("#anMeasures").innerHTML = ""; $("#anTiles").classList.remove("busy");
+    $("#anReport").value = t("Greška:") + " " + e.message; $("#anMeasures").innerHTML = ""; $("#anTiles").classList.remove("busy");
   }
 }
 const saveRec = (patch) => api("PUT", "/api/recordings/" + an.rec.id, patch).then(() => Object.assign(an.rec, patch)).catch((e) => toast(e.message));
@@ -1065,8 +1066,8 @@ function tiles(r, cppsPending) {
   const cal = calibrated() ? st.settings.calibration_db : null;
   const T = [
     ["F0 prosjek", num(r.f0_mean, 1), "Hz", null, `SD ${num(r.f0_sd, 1)} Hz`],
-    ["Jitter (local)", num(r.jitter_local, 2), "%", r.jitter_local == null ? null : r.jitter_local <= 1.04, "granica < 1,04 %"],
-    ["Shimmer (local)", num(r.shimmer_local, 2), "%", r.shimmer_local == null ? null : r.shimmer_local <= 3.81, "granica < 3,81 %"],
+    ["Jitter (local)", num(r.jitter_local, 2), "%", r.jitter_local == null ? null : r.jitter_local <= 1.04, "granica < " + I18N.dec("1.04") + " %"],
+    ["Shimmer (local)", num(r.shimmer_local, 2), "%", r.shimmer_local == null ? null : r.shimmer_local <= 3.81, "granica < " + I18N.dec("3.81") + " %"],
     ["HNR", num(r.hnr_db, 1), "dB", r.hnr_db == null ? null : r.hnr_db >= 20, "granica > 20 dB"],
     ["CPPS", cppsPending ? "…" : num(r.cpps, 1), "dB", null, cppsPending ? "računa se…" : "viši = periodičniji glas"],
     ["Intenzitet", r.intensity_mean_db == null ? "—" : num(r.intensity_mean_db + (cal || 0), 1), cal != null ? "dB SPL" : "dB", null, cal != null ? "kalibrirano" : "relativno (nekalibrirano)"],
@@ -1090,17 +1091,19 @@ async function loadSummary() {
 }
 $("#anCopy").onclick = () => { navigator.clipboard?.writeText(reportText()).then(() => toastInfo("Kopirano"), () => toast("Kopiranje nije dopušteno")); };
 function reportText() {
-  const head = st.patient ? `Pacijent: ${st.patient.name}${st.patient.code ? " (" + st.patient.code + ")" : ""}\n` : "";
+  const en = I18N.lang === "en";
+  const head = st.patient ? `${en ? "Patient" : "Pacijent"}: ${st.patient.name}${st.patient.code ? " (" + st.patient.code + ")" : ""}\n` : "";
   let txt = (st.settings.clinic_name ? st.settings.clinic_name + "\n" : "") + head +
-    `Snimka: ${recTitle(an.rec)} · ${fmtTime(an.rec.created)}${an.sel ? ` · odsječak ${num(an.sel[0], 2)}–${num(an.sel[1], 2)} s` : ""}\n` +
-    (an.rec.notes ? `Opažanja: ${an.rec.notes}\n` : "") + "\n" + $("#anReport").value;
-  if (an.ai) txt += `\n\n==== AI MIŠLJENJE (${an.ai.model}, ${fmtTime(an.ai.created)}) — pomoć rehabilitatoru, nije dijagnoza ====\n\n` + an.ai.text;
+    `${en ? "Recording" : "Snimka"}: ${recTitle(an.rec)} · ${fmtTime(an.rec.created)}${an.sel ? ` · ${en ? "selection" : "odsječak"} ${num(an.sel[0], 2)}–${num(an.sel[1], 2)} s` : ""}\n` +
+    (an.rec.notes ? `${en ? "Observations" : "Opažanja"}: ${an.rec.notes}\n` : "") + "\n" + $("#anReport").value;
+  if (an.ai) txt += en ? `\n\n==== AI OPINION (${an.ai.model}, ${fmtTime(an.ai.created)}) — an aid for the clinician, not a diagnosis ====\n\n` + an.ai.text
+    : `\n\n==== AI MIŠLJENJE (${an.ai.model}, ${fmtTime(an.ai.created)}) — pomoć rehabilitatoru, nije dijagnoza ====\n\n` + an.ai.text;
   return txt;
 }
 $("#anSave").onclick = () => {
-  const who = st.patient ? st.patient.name.replace(/\W+/g, "_") : "pacijent";
+  const who = st.patient ? st.patient.name.replace(/\W+/g, "_") : t("pacijent");
   const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([reportText()], { type: "text/plain;charset=utf-8" }));
-  a.download = `${who}_nalaz_${new Date(an.rec.created).toISOString().slice(0, 10)}.txt`; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  a.download = `${who}_${I18N.lang === "en" ? "report" : "nalaz"}_${new Date(an.rec.created).toISOString().slice(0, 10)}.txt`; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 };
 
 // ---- printable report (browser print → PDF)
@@ -1112,7 +1115,7 @@ $("#anPrint").onclick = () => {
   const w = window.open("", "_blank");
   if (!w) return toast("Preglednik je blokirao novi prozor — dopustite skočne prozore");
   const kv = (k, v) => (v ? `<tr><th>${esc(k)}</th><td>${esc(v)}</td></tr>` : "");
-  w.document.write(`<!doctype html><html lang="hr"><head><meta charset="utf-8"><title>Nalaz — ${esc(p ? p.name : recTitle(an.rec))}</title><style>
+  w.document.write(`<!doctype html><html lang="${I18N.lang}"><head><meta charset="utf-8"><title>Nalaz — ${esc(p ? p.name : recTitle(an.rec))}</title><style>
     body{font:11pt/1.4 system-ui,Segoe UI,Roboto,sans-serif;color:#111;margin:18mm}h1{font-size:16pt;margin:0}h2{font-size:12pt;margin:16px 0 6px;border-bottom:1px solid #999}
     table{border-collapse:collapse;width:100%}th,td{padding:2px 6px;text-align:left;vertical-align:top}.pt th{width:28%;color:#444;font-weight:500}
     .m td,.m th{border-bottom:1px solid #ddd;font-size:9.5pt}.m .r{text-align:right}.m .grp td{font-weight:700;background:#f2f2f2}.m .bad td{color:#b00020}.dim{color:#666}
@@ -1122,7 +1125,7 @@ $("#anPrint").onclick = () => {
     @media print{body{margin:0}.noprint{display:none}}</style></head><body>
     <div class="noprint" style="margin-bottom:10px"><button onclick="print()">Ispis / spremi kao PDF</button></div>
     <div class="hd"><div><h1>Akustička analiza glasa i govora</h1><div class="dim">${esc(S.clinic_name || "")}</div></div><div class="dim">Ispisano ${esc(fmtTime(Date.now()))}</div></div>
-    <h2>Pacijent</h2><table class="pt">${p ? kv("Ime i prezime", p.name) + kv("Šifra / MBO", p.code) + kv("Datum rođenja", p.birth ? p.birth.split("-").reverse().join(".") + "." + (age != null ? ` (${age} god.)` : "") : "") + kv("Spol", p.sex) + kv("Dijagnoza", p.diagnosis) + kv("Razlog dolaska", p.complaint) : kv("Pacijent", "—")}</table>
+    <h2>Pacijent</h2><table class="pt">${p ? kv("Ime i prezime", p.name) + kv("Šifra / MBO", p.code) + kv("Datum rođenja", p.birth ? p.birth.split("-").reverse().join(".") + "." + (age != null ? ` (${yrs(age)})` : "") : "") + kv("Spol", p.sex) + kv("Dijagnoza", p.diagnosis) + kv("Razlog dolaska", p.complaint) : kv("Pacijent", "—")}</table>
     <h2>Snimka</h2><table class="pt">${kv("Zadatak", an.rec.task) + kv("Oznaka", an.rec.label) + kv("Datum snimanja", fmtTime(an.rec.created)) + kv("Izvor", an.rec.source === "out" ? "obrađeni izlaz" : "suhi mikrofon") +
       kv("Analizirani odsječak", `${num(an.sel[0], 2)}–${num(an.sel[1], 2)} s (${num(an.sel[1] - an.sel[0], 2)} s od ${num(an.rec.duration, 2)} s)`) + kv("Frekvencija uzorkovanja", an.rec.sample_rate + " Hz") +
       kv("Postavke analize", `visina ${an.settings.pitch_floor}–${an.settings.pitch_ceiling} Hz · maks. formant ${an.settings.max_formant} Hz · ${an.settings.n_formants} formanata`) +
@@ -1135,7 +1138,7 @@ $("#anPrint").onclick = () => {
     <div class="sig"><div>Datum</div><div>${esc(S.clinician || "Rehabilitator / logoped")}</div></div>
     <p class="dim" style="font-size:8pt;margin-top:20px">SterOidSoundBoard ${esc($("#ver").textContent)} · DigiLingua. Mjere su izračunate Praat-kompatibilnim algoritmima. Nalaz je pomoćno sredstvo i ne zamjenjuje kliničku procjenu.</p>
     <script>window.onload=()=>setTimeout(()=>print(),300)<\/script></body></html>`);
-  w.document.close();
+  w.document.close(); I18N.apply(w.document.body); w.document.title = t(w.document.title);
 };
 
 // ============================================================ progress (Napredak)
@@ -1215,10 +1218,10 @@ function drawChart(cv, pts, norm, dir, dec) {
 $("#prCsv").onclick = () => {
   const rows = prRows(); if (!rows.length) return;
   const keys = ["created", "task", "label", "duration", "f0_mean", "f0_sd", "f0_range_st", "jitter_local", "shimmer_local", "hnr_db", "cpps", "intensity_mean_db", "max_voiced_s", "speech_rate", "articulation_rate", "pauses", "f1", "f2", "disfluencies", "sld", "pct_ss"];
-  const cell = (r, k) => { if (k === "created") return new Date(r.created).toISOString().replace("T", " ").slice(0, 16); const v = k === "intensity_mean_db" ? prValue(r, k) : r[k]; if (v == null) return ""; if (typeof v === "number") return String(+v.toFixed(4)).replace(".", ","); return '"' + String(v).replace(/"/g, '""') + '"'; };
+  const cell = (r, k) => { if (k === "created") return new Date(r.created).toISOString().replace("T", " ").slice(0, 16); const v = k === "intensity_mean_db" ? prValue(r, k) : r[k]; if (v == null) return ""; if (typeof v === "number") return I18N.dec(String(+v.toFixed(4))); return '"' + String(v).replace(/"/g, '""') + '"'; };
   const csv = "﻿" + keys.join(";") + "\n" + rows.map((r) => keys.map((k) => cell(r, k)).join(";")).join("\n");
   const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
-  a.download = `${st.patient.name.replace(/\W+/g, "_")}_napredak.csv`; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  a.download = `${st.patient.name.replace(/\W+/g, "_")}_${I18N.lang === "en" ? "progress" : "napredak"}.csv`; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 };
 
 // ============================================================ clinic settings dialog
@@ -1329,8 +1332,8 @@ function aiState() {
   const el = (Date.now() - r.t0) / 1000, s = r.stats || {};
   let t;
   if (r.status === "running") {
-    t = !r.text ? `⏳ ${fmtSecs(el)} · model učitava i čita upit…` : `✍ ${fmtSecs(el)} · ${s.tokens || 0} tokena${s.tps ? ` · ${String(s.tps).replace(".", ",")} tok/s` : ""}`;
-  } else t = { done: "✓ Gotovo", error: "✗ Greška", cancelled: "■ Zaustavljeno" }[r.status] + ` nakon ${fmtSecs(r.elapsed ?? el)}` + (s.tokens ? ` · ${s.tokens} tokena` : "") + (s.tps ? ` · ${String(s.tps).replace(".", ",")} tok/s` : "");
+    t = !r.text ? `⏳ ${fmtSecs(el)} · model učitava i čita upit…` : `✍ ${fmtSecs(el)} · ${s.tokens || 0} tokena${s.tps ? ` · ${I18N.dec(String(s.tps))} tok/s` : ""}`;
+  } else t = { done: "✓ Gotovo", error: "✗ Greška", cancelled: "■ Zaustavljeno" }[r.status] + ` nakon ${fmtSecs(r.elapsed ?? el)}` + (s.tokens ? ` · ${s.tokens} tokena` : "") + (s.tps ? ` · ${I18N.dec(String(s.tps))} tok/s` : "");
   $("#anAiState").textContent = t;
   $("#anAiStop").classList.toggle("hidden", r.status !== "running");
 }
@@ -1559,7 +1562,7 @@ function olRender() {
   const rec = $("#olRec"); rec.innerHTML = "";
   OL_REC.forEach(([name, gbs, vis, note]) => {
     const d = el("div", "ol-item");
-    d.innerHTML = `<div class="grow"><b>${esc(name)}</b> ${vis ? '<span class="tag vis">👁 slika</span>' : ""} <span class="small dim">≈ ${String(gbs).replace(".", ",")} GB</span><div class="small dim">${esc(note)}</div></div>`;
+    d.innerHTML = `<div class="grow"><b>${esc(name)}</b> ${vis ? '<span class="tag vis">👁 slika</span>' : ""} <span class="small dim">≈ ${I18N.dec(String(gbs))} GB</span><div class="small dim">${esc(note)}</div></div>`;
     const has = olHas(name);
     const b = el("button", "small" + (has ? "" : " pri"), has ? "✓ preuzet" : "⬇ Preuzmi");
     b.disabled = has || !OL?.running || !!olPullTask;

@@ -215,6 +215,8 @@ pub struct AiJob {
     pub system: String,
     pub user: String,
     pub image: Option<(String, String)>,
+    /// English prompt, answer and log.
+    pub en: bool,
 }
 
 fn load_json<T: serde::de::DeserializeOwned + Default>(p: &PathBuf) -> T {
@@ -573,12 +575,12 @@ impl App {
             Ok(v) => v,
             Err(e) => {
                 let _ = std::fs::remove_file(&path);
-                return Err(anyhow!("datoteka nije ispravan WAV: {e}"));
+                return Err(anyhow!(tr!("datoteka nije ispravan WAV: {e}", "the file is not a valid WAV: {e}")));
             }
         };
         if x.is_empty() || sr < 8000 {
             let _ = std::fs::remove_file(&path);
-            return Err(anyhow!("snimka je prazna ili ima prenisku frekvenciju uzorkovanja ({sr} Hz)"));
+            return Err(anyhow!(tr!("snimka je prazna ili ima prenisku frekvenciju uzorkovanja ({sr} Hz)", "the recording is empty or its sample rate is too low ({sr} Hz)")));
         }
         let meta = Recording {
             id,
@@ -602,8 +604,11 @@ impl App {
     }
 
     /// Analyse a selection and keep the result with the recording.
-    pub fn save_analysis(&self, id: &str, start: f32, end: f32, settings: Option<AnalysisSettings>, label: String) -> Result<clinic::SavedAnalysis> {
-        let rep = self.analyze(id, Some(start), Some(end), settings)?;
+    pub fn save_analysis(&self, id: &str, start: f32, end: f32, settings: Option<AnalysisSettings>, label: String, en: bool) -> Result<clinic::SavedAnalysis> {
+        let mut rep = self.analyze(id, Some(start), Some(end), settings)?;
+        if en {
+            analysis::localize(&mut rep, true);
+        }
         let mut report = serde_json::to_value(&rep)?;
         if let Some(o) = report.as_object_mut() {
             o.remove("pitch");
@@ -612,7 +617,7 @@ impl App {
         let mut c = self.clinic.lock().unwrap();
         let r = c.recordings.iter_mut().find(|r| r.id == id).ok_or_else(|| anyhow!("no such recording"))?;
         if r.analyses.len() >= 200 {
-            return Err(anyhow!("previše spremljenih analiza za ovu snimku"));
+            return Err(anyhow!(tr!("previše spremljenih analiza za ovu snimku", "too many saved analyses for this recording")));
         }
         r.analyses.push(a.clone());
         self.save_clinic(&c)?;
@@ -625,7 +630,7 @@ impl App {
         let n = r.analyses.len();
         r.analyses.retain(|a| a.id != id);
         if r.analyses.len() == n {
-            return Err(anyhow!("nema te analize"));
+            return Err(anyhow!(tr!("nema te analize", "no such analysis")));
         }
         self.save_clinic(&c)
     }
@@ -779,7 +784,7 @@ impl App {
     pub fn save_clinical_preset(&self, name: &str, description: &str, category: &str) -> Result<String> {
         let name = name.trim();
         if name.is_empty() || name.len() > 120 {
-            return Err(anyhow!("naziv preseta je obavezan (do 120 znakova)"));
+            return Err(anyhow!(tr!("naziv preseta je obavezan (do 120 znakova)", "a preset name is required (up to 120 characters)")));
         }
         let board = self.inner.lock().unwrap().board.clone();
         let p = StoredPreset {
@@ -808,7 +813,7 @@ impl App {
     }
 
     pub fn delete_clinical_preset(&self, id: &str) -> Result<()> {
-        let c = id.strip_prefix("c:").ok_or_else(|| anyhow!("tvornički preseti se ne mogu brisati"))?;
+        let c = id.strip_prefix("c:").ok_or_else(|| anyhow!(tr!("tvornički preseti se ne mogu brisati", "factory presets cannot be deleted")))?;
         std::fs::remove_file(self.custom_preset_path(c)?).map_err(|_| anyhow!("no such preset"))?;
         self.emit(json!({"t": "clinic_presets"}));
         Ok(())
@@ -817,7 +822,8 @@ impl App {
     // ------------------------------------------------------------ AI opinion
 
     /// Build the full AI request for a recording range. `image` is a data URL.
-    pub fn ai_job(&self, id: &str, start: Option<f32>, end: Option<f32>, settings: Option<AnalysisSettings>, question: &str, image: Option<&str>) -> Result<AiJob> {
+    pub fn ai_job(&self, id: &str, start: Option<f32>, end: Option<f32>, settings: Option<AnalysisSettings>, question: &str, image: Option<&str>, en: bool) -> Result<AiJob> {
+        crate::i18n::set_en(en);
         let cfg = self.ai.lock().unwrap().clone();
         let (rec, patient, earlier) = {
             let c = self.clinic.lock().unwrap();
@@ -835,7 +841,7 @@ impl App {
         };
         if let Some(p) = &patient {
             if !p.ai_consent {
-                return Err(anyhow!("pacijent nema zabilježenu suglasnost za AI analizu (Uredi pacijenta)"));
+                return Err(anyhow!(tr!("pacijent nema zabilježenu suglasnost za AI analizu (Uredi pacijenta)", "the patient has no recorded consent for AI analysis (Edit patient)")));
             }
         }
         let report = self.analyze(id, start, end, settings)?;
@@ -865,15 +871,16 @@ impl App {
             has_image: image.is_some(),
             annotations: summary.as_ref(),
             calibration_db: settings.calibration_db,
+            en,
         });
-        Ok(AiJob { cfg, rec, start: a.min(b), end: a.max(b), system, user, image })
+        Ok(AiJob { cfg, rec, start: a.min(b), end: a.max(b), system, user, image, en })
     }
 
     /// Run the job against the configured provider and store the opinion.
     fn save_ai_report(&self, rep: &AiReport) -> Result<()> {
         let mut c = self.clinic.lock().unwrap();
         if !c.recordings.iter().any(|r| r.id == rep.recording_id) {
-            return Err(anyhow!("snimka je u međuvremenu obrisana"));
+            return Err(anyhow!(tr!("snimka je u međuvremenu obrisana", "the recording has been deleted in the meantime")));
         }
         c.ai_reports.push(rep.clone());
         self.save_clinic(&c)
@@ -883,9 +890,9 @@ impl App {
         let mut tasks = self.ai_tasks.lock().unwrap();
         if let Some(t) = tasks.iter().find(|t| t.status == "running" && t.kind == kind) {
             return Err(anyhow!(if kind == "pull" {
-                format!("već se preuzima model {} — pričekajte da završi", t.label)
+                tr!("već se preuzima model {} — pričekajte da završi", "model {} is already downloading — wait until it finishes", t.label)
             } else {
-                "AI već obrađuje drugi zahtjev — pričekajte ga ili ga zaustavite".to_string()
+                tr!("AI već obrađuje drugi zahtjev — pričekajte ga ili ga zaustavite", "the AI is already working on another request — wait for it or stop it")
             }));
         }
         let id = clinic::new_id("t");
@@ -937,7 +944,9 @@ impl App {
     pub fn ai_start(self: &Arc<Self>, job: AiJob, question: String) -> Result<String> {
         let (id, prog) = self.new_task("report", Some(job.rec.id.clone()), job.cfg.model.trim().to_string())?;
         let app = self.clone();
+        let en = job.en;
         std::thread::Builder::new().name("ai".into()).spawn(move || {
+            crate::i18n::set_en(en);
             use ai::Progress;
             let res = ai::ask_report(&job.cfg, &job.system, &job.user, job.image.as_ref(), &prog);
             prog.flush();
@@ -949,7 +958,7 @@ impl App {
                     let rep = ai::new_report(&job.rec, &job.cfg, job.start, job.end, &question, ans);
                     match app.save_ai_report(&rep) {
                         Ok(()) => {
-                            prog.log("Mišljenje je spremljeno uz snimku.");
+                            prog.log(&tr!("Mišljenje je spremljeno uz snimku.", "The opinion was saved with the recording."));
                             app.finish_task(&prog.id, "done", Some(rep), None)
                         }
                         Err(e) => app.finish_task(&prog.id, "error", None, Some(e.to_string())),
@@ -957,7 +966,7 @@ impl App {
                 }
                 Err(_) if prog.cancelled() => app.finish_task(&prog.id, "cancelled", None, None),
                 Err(e) => {
-                    prog.log(&format!("Greška: {e:#}"));
+                    prog.log(&tr!("Greška: {e:#}", "Error: {e:#}"));
                     app.finish_task(&prog.id, "error", None, Some(format!("{e:#}")))
                 }
             }
@@ -966,18 +975,20 @@ impl App {
     }
 
     /// Download an Ollama model in the background.
-    pub fn ollama_pull(self: &Arc<Self>, model: String) -> Result<String> {
+    pub fn ollama_pull(self: &Arc<Self>, model: String, en: bool) -> Result<String> {
+        crate::i18n::set_en(en);
         let root = self.ai.lock().unwrap().clone();
         let root = crate::ollama::root(if root.provider == "ollama" { &root.base_url } else { "" });
         let (id, prog) = self.new_task("pull", None, model.clone())?;
         let app = self.clone();
         std::thread::Builder::new().name("ollama-pull".into()).spawn(move || {
+            crate::i18n::set_en(en);
             use ai::Progress;
             match crate::ollama::pull(&root, &model, &prog) {
                 Ok(()) => app.finish_task(&prog.id, "done", None, None),
                 Err(_) if prog.cancelled() => app.finish_task(&prog.id, "cancelled", None, None),
                 Err(e) => {
-                    prog.log(&format!("Greška: {e:#}"));
+                    prog.log(&tr!("Greška: {e:#}", "Error: {e:#}"));
                     app.finish_task(&prog.id, "error", None, Some(format!("{e:#}")))
                 }
             }
@@ -985,19 +996,20 @@ impl App {
         Ok(id)
     }
 
-    pub fn cancel_task(&self, id: &str) -> Result<()> {
+    pub fn cancel_task(&self, id: &str, en: bool) -> Result<()> {
+        let msg = if en { "Stopped at the user's request." } else { "Zaustavljeno na zahtjev korisnika." };
         let (cancel, ms, n) = {
             let mut tasks = self.ai_tasks.lock().unwrap();
-            let t = tasks.iter_mut().find(|t| t.id == id).ok_or_else(|| anyhow!("nema tog zadatka"))?;
+            let t = tasks.iter_mut().find(|t| t.id == id).ok_or_else(|| anyhow!(tr!("nema tog zadatka", "no such task")))?;
             let ms = clinic::now_ms().saturating_sub(t.started);
             let n = t.log.len();
             if t.status == "running" {
-                t.log.push((ms, "Zaustavljeno na zahtjev korisnika.".into()));
+                t.log.push((ms, msg.into()));
             }
             (t.cancel.clone(), ms, n)
         };
         cancel.store(true, Relaxed);
-        self.emit(json!({"t": "ai_task", "id": id, "ev": "log", "n": n, "ms": ms, "msg": "Zaustavljeno na zahtjev korisnika."}));
+        self.emit(json!({"t": "ai_task", "id": id, "ev": "log", "n": n, "ms": ms, "msg": msg}));
         self.finish_task(id, "cancelled", None, None);
         Ok(())
     }

@@ -2,7 +2,7 @@ use crate::clinic::{self, Patient, PatientIn};
 use crate::state::App;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{DefaultBodyLimit, Path, Query, State};
-use axum::http::{header, StatusCode, Uri};
+use axum::http::{header, HeaderMap, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
@@ -27,7 +27,7 @@ fn err(e: impl std::fmt::Display) -> Response {
 pub fn router(app: Arc<App>) -> Router {
     Router::new()
         .route("/api/status", get(status))
-        .route("/api/devices", get(|| async { Json(tokio::task::spawn_blocking(list_devices).await.unwrap_or_default()) }))
+        .route("/api/devices", get(|| async { Json(crate::i18n::blocking(list_devices).await.unwrap_or_default()) }))
         .route("/api/node-types", get(|| async { Json(NodeKind::ALL.iter().map(|k| k.info()).collect::<Vec<_>>()) }))
         .route("/api/audio/start", post(audio_start))
         .route("/api/audio/stop", post(audio_stop))
@@ -79,7 +79,19 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/ai-reports/{id}", delete(ai_delete))
         .route("/ws", get(ws))
         .fallback(static_file)
+        .layer(axum::middleware::from_fn(lang_scope))
         .with_state(app)
+}
+
+/// Every request runs with its UI language, so server texts (errors, reports, logs) follow it.
+async fn lang_scope(req: axum::extract::Request, next: axum::middleware::Next) -> Response {
+    let en = is_en(req.headers()) || req.uri().query().is_some_and(|q| q.split('&').any(|p| p.eq_ignore_ascii_case("lang=en")));
+    crate::i18n::REQ_EN.scope(en, next.run(req)).await
+}
+
+/// UI language of the request (`x-lang: en`, or `?lang=en` on download links).
+fn is_en(h: &HeaderMap) -> bool {
+    h.get("x-lang").and_then(|v| v.to_str().ok()).is_some_and(|v| v.eq_ignore_ascii_case("en"))
 }
 
 async fn status(State(app): S) -> Json<Value> {
@@ -100,7 +112,7 @@ async fn board(State(app): S) -> Json<Board> {
 }
 
 async fn audio_start(State(app): S, Json(cfg): Json<AudioConfig>) -> Response {
-    match tokio::task::spawn_blocking(move || app.start_audio(Some(cfg))).await {
+    match crate::i18n::blocking(move || app.start_audio(Some(cfg))).await {
         Ok(Ok(info)) => Json(info).into_response(),
         Ok(Err(e)) => err(e),
         Err(e) => err(e),
@@ -108,7 +120,7 @@ async fn audio_start(State(app): S, Json(cfg): Json<AudioConfig>) -> Response {
 }
 
 async fn audio_stop(State(app): S) -> StatusCode {
-    let _ = tokio::task::spawn_blocking(move || app.stop_audio()).await;
+    let _ = crate::i18n::blocking(move || app.stop_audio()).await;
     StatusCode::NO_CONTENT
 }
 
@@ -208,12 +220,12 @@ async fn list_patients(State(app): S) -> Json<Vec<Patient>> {
     Json(v)
 }
 
-fn check_patient(p: &PatientIn) -> Result<(), &'static str> {
+fn check_patient(p: &PatientIn) -> Result<(), String> {
     if p.name.trim().is_empty() {
-        return Err("ime je obavezno");
+        return Err(tr!("ime je obavezno", "a name is required"));
     }
     if p.text_fields().iter().any(|(v, max)| v.len() > *max) {
-        return Err("predugačak unos");
+        return Err(tr!("predugačak unos", "input too long"));
     }
     Ok(())
 }
@@ -356,14 +368,14 @@ struct RecStart {
 async fn record_start(State(app): S, Json(b): Json<RecStart>) -> Response {
     let label: String = b.label.chars().take(200).collect();
     let task: String = b.task.chars().take(200).collect();
-    match tokio::task::spawn_blocking(move || app.start_recording(b.patient_id, &b.source, label, task)).await {
+    match crate::i18n::blocking(move || app.start_recording(b.patient_id, &b.source, label, task)).await {
         Ok(r) => done(r),
         Err(e) => err(e),
     }
 }
 
 async fn record_stop(State(app): S) -> Response {
-    match tokio::task::spawn_blocking(move || app.stop_recording()).await {
+    match crate::i18n::blocking(move || app.stop_recording()).await {
         Ok(Ok(r)) => Json(r).into_response(),
         Ok(Err(e)) => err(e),
         Err(e) => err(e),
@@ -390,17 +402,17 @@ struct RecordingEdit {
 
 fn check_annotations(a: &[clinic::Annotation], duration: f32) -> Result<(), String> {
     if a.len() > 5000 {
-        return Err("previše oznaka".into());
+        return Err(tr!("previše oznaka", "too many labels"));
     }
     for x in a {
         if !(x.start.is_finite() && x.end.is_finite() && x.start >= 0.0 && x.end > x.start && x.end <= duration + 0.5) {
-            return Err(format!("neispravno vrijeme oznake {:.2}–{:.2} s", x.start, x.end));
+            return Err(tr!("neispravno vrijeme oznake {:.2}–{:.2} s", "invalid label time {:.2}–{:.2} s", x.start, x.end));
         }
         if !clinic::ANNOTATION_KINDS.iter().any(|k| k.0 == x.kind) {
-            return Err(format!("nepoznata vrsta oznake: {}", x.kind));
+            return Err(tr!("nepoznata vrsta oznake: {}", "unknown label kind: {}", x.kind));
         }
         if x.text.len() > 500 || x.id.is_empty() || x.id.len() > 40 || !x.id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
-            return Err("neispravna oznaka".into());
+            return Err(tr!("neispravna oznaka", "invalid label"));
         }
     }
     Ok(())
@@ -443,7 +455,7 @@ struct UploadQuery {
 async fn upload_recording(State(app): S, Query(q): Query<UploadQuery>, body: axum::body::Bytes) -> Response {
     let task: String = q.task.chars().take(200).collect();
     let label: String = q.label.chars().take(200).collect();
-    match tokio::task::spawn_blocking(move || app.import_recording(q.patient.filter(|p| !p.is_empty()), task, label, &body)).await {
+    match crate::i18n::blocking(move || app.import_recording(q.patient.filter(|p| !p.is_empty()), task, label, &body)).await {
         Ok(Ok(r)) => Json(r).into_response(),
         Ok(Err(e)) => err(e),
         Err(e) => err(e),
@@ -459,9 +471,10 @@ struct SaveAnalysisIn {
     label: String,
 }
 
-async fn save_analysis(State(app): S, Path(id): Path<String>, Json(b): Json<SaveAnalysisIn>) -> Response {
+async fn save_analysis(State(app): S, Path(id): Path<String>, h: HeaderMap, Json(b): Json<SaveAnalysisIn>) -> Response {
     let label: String = b.label.chars().take(200).collect();
-    match tokio::task::spawn_blocking(move || app.save_analysis(&id, b.start, b.end, b.settings, label)).await {
+    let en = is_en(&h);
+    match crate::i18n::blocking(move || app.save_analysis(&id, b.start, b.end, b.settings, label, en)).await {
         Ok(Ok(a)) => Json(a).into_response(),
         Ok(Err(e)) => err(e),
         Err(e) => err(e),
@@ -472,7 +485,13 @@ async fn delete_analysis(State(app): S, Path((id, aid)): Path<(String, String)>)
     done(app.delete_analysis(&id, &aid))
 }
 
-async fn textgrid(State(app): S, Path(id): Path<String>) -> Response {
+#[derive(Deserialize)]
+struct LangQuery {
+    lang: Option<String>,
+}
+
+async fn textgrid(State(app): S, Path(id): Path<String>, Query(q): Query<LangQuery>) -> Response {
+    let en = q.lang.as_deref() == Some("en");
     let c = app.clinic.lock().unwrap();
     let Some(r) = c.recordings.iter().find(|r| r.id == id) else { return StatusCode::NOT_FOUND.into_response() };
     (
@@ -480,13 +499,13 @@ async fn textgrid(State(app): S, Path(id): Path<String>) -> Response {
             (header::CONTENT_TYPE, "text/plain; charset=utf-8".to_string()),
             (header::CONTENT_DISPOSITION, format!("attachment; filename=\"{}.TextGrid\"", r.id)),
         ],
-        clinic::textgrid(r),
+        clinic::textgrid(r, en),
     )
         .into_response()
 }
 
 async fn annotation_summary(State(app): S, Path(id): Path<String>) -> Response {
-    let r = tokio::task::spawn_blocking(move || -> anyhow::Result<Value> {
+    let r = crate::i18n::blocking(move || -> anyhow::Result<Value> {
         let rec = app.clinic.lock().unwrap().recordings.iter().find(|r| r.id == id).cloned().ok_or_else(|| anyhow::anyhow!("no such recording"))?;
         let st = app.clinic_settings().analysis;
         let nuclei = app.whole_report(&id, &st.sanitized()).ok().map(|w| w.syllable_nuclei);
@@ -501,11 +520,11 @@ async fn annotation_summary(State(app): S, Path(id): Path<String>) -> Response {
 }
 
 async fn annotation_kinds() -> Json<Value> {
-    Json(json!(clinic::ANNOTATION_KINDS.iter().map(|(id, label, sld)| json!({"id": id, "label": label, "sld": sld})).collect::<Vec<_>>()))
+    Json(json!(clinic::ANNOTATION_KINDS.iter().map(|(id, label, sld)| json!({"id": id, "label": label, "label_en": clinic::kind_label_en(id), "sld": sld})).collect::<Vec<_>>()))
 }
 
 async fn progress(State(app): S, Path(id): Path<String>) -> Response {
-    match tokio::task::spawn_blocking(move || app.progress(&id)).await {
+    match crate::i18n::blocking(move || app.progress(&id)).await {
         Ok(Ok(v)) => Json(v).into_response(),
         Ok(Err(e)) => err(e),
         Err(e) => err(e),
@@ -595,10 +614,16 @@ struct Range {
     settings: Option<steroid_engine::analysis::AnalysisSettings>,
 }
 
-async fn analyze(State(app): S, Path(id): Path<String>, body: Option<Json<Range>>) -> Response {
+async fn analyze(State(app): S, Path(id): Path<String>, h: HeaderMap, body: Option<Json<Range>>) -> Response {
     let r = body.map(|b| b.0).unwrap_or_default();
-    match tokio::task::spawn_blocking(move || app.analyze(&id, r.start, r.end, r.settings)).await {
-        Ok(Ok(rep)) => Json(rep).into_response(),
+    let en = is_en(&h);
+    match crate::i18n::blocking(move || app.analyze(&id, r.start, r.end, r.settings)).await {
+        Ok(Ok(mut rep)) => {
+            if en {
+                steroid_engine::analysis::localize(&mut rep, true);
+            }
+            Json(rep).into_response()
+        }
         Ok(Err(e)) => err(e),
         Err(e) => err(e),
     }
@@ -606,7 +631,7 @@ async fn analyze(State(app): S, Path(id): Path<String>, body: Option<Json<Range>
 
 async fn tracks(State(app): S, Path(id): Path<String>, body: Option<Json<Range>>) -> Response {
     let r = body.map(|b| b.0).unwrap_or_default();
-    match tokio::task::spawn_blocking(move || app.tracks(&id, r.settings)).await {
+    match crate::i18n::blocking(move || app.tracks(&id, r.settings)).await {
         Ok(Ok(t)) => Json(&*t).into_response(),
         Ok(Err(e)) => err(e),
         Err(e) => err(e),
@@ -666,9 +691,15 @@ async fn set_ai_config(State(app): S, Json(b): Json<AiConfigIn>) -> Response {
     }
 }
 
-async fn ai_test(State(app): S) -> Response {
+async fn ai_test(State(app): S, h: HeaderMap) -> Response {
     let cfg = app.ai.lock().unwrap().clone();
-    match tokio::task::spawn_blocking(move || crate::ai::test(&cfg)).await {
+    let en = is_en(&h);
+    match crate::i18n::blocking(move || {
+        crate::i18n::set_en(en);
+        crate::ai::test(&cfg)
+    })
+    .await
+    {
         Ok(Ok(a)) => Json(json!({"ok": true, "model": a.model, "text": a.text.chars().take(200).collect::<String>()})).into_response(),
         Ok(Err(e)) => err(e),
         Err(e) => err(e),
@@ -689,9 +720,10 @@ struct AiReq {
     settings: Option<steroid_engine::analysis::AnalysisSettings>,
 }
 
-async fn ai_preview(State(app): S, Path(id): Path<String>, Json(b): Json<AiReq>) -> Response {
+async fn ai_preview(State(app): S, Path(id): Path<String>, h: HeaderMap, Json(b): Json<AiReq>) -> Response {
+    let en = is_en(&h);
     let q: String = b.question.chars().take(4000).collect();
-    let r = tokio::task::spawn_blocking(move || app.ai_job(&id, b.start, b.end, b.settings, &q, b.image.as_deref())).await;
+    let r = crate::i18n::blocking(move || app.ai_job(&id, b.start, b.end, b.settings, &q, b.image.as_deref(), en)).await;
     match r {
         Ok(Ok(j)) => Json(json!({
             "provider": j.cfg.provider_name(),
@@ -709,10 +741,11 @@ async fn ai_preview(State(app): S, Path(id): Path<String>, Json(b): Json<AiReq>)
 
 /// Starts the AI opinion in the background and returns its task id; the log,
 /// streamed text and result arrive as `ai_task` WebSocket events.
-async fn ai_run(State(app): S, Path(id): Path<String>, Json(b): Json<AiReq>) -> Response {
+async fn ai_run(State(app): S, Path(id): Path<String>, h: HeaderMap, Json(b): Json<AiReq>) -> Response {
+    let en = is_en(&h);
     let q: String = b.question.chars().take(4000).collect();
-    let r = tokio::task::spawn_blocking(move || {
-        let job = app.ai_job(&id, b.start, b.end, b.settings, &q, b.image.as_deref())?;
+    let r = crate::i18n::blocking(move || {
+        let job = app.ai_job(&id, b.start, b.end, b.settings, &q, b.image.as_deref(), en)?;
         app.ai_start(job, q)
     })
     .await;
@@ -748,8 +781,8 @@ async fn ai_task(State(app): S, Path(id): Path<String>) -> Response {
     }
 }
 
-async fn ai_cancel(State(app): S, Path(id): Path<String>) -> Response {
-    done(app.cancel_task(&id))
+async fn ai_cancel(State(app): S, Path(id): Path<String>, h: HeaderMap) -> Response {
+    done(app.cancel_task(&id, is_en(&h)))
 }
 
 #[derive(Deserialize)]
@@ -759,7 +792,8 @@ struct OllamaUrl {
 
 /// Ollama status for the settings panel; `url` lets the panel check an
 /// address before it is saved.
-async fn ollama_status(State(app): S, Query(q): Query<OllamaUrl>) -> Response {
+async fn ollama_status(State(app): S, Query(q): Query<OllamaUrl>, h: HeaderMap) -> Response {
+    let en = is_en(&h);
     let url = match q.url.map(|u| u.trim().to_string()).filter(|u| !u.is_empty()) {
         Some(u) if u.starts_with("http://") || u.starts_with("https://") => u,
         Some(_) => return err("adresa mora počinjati s http:// ili https://"),
@@ -769,7 +803,15 @@ async fn ollama_status(State(app): S, Query(q): Query<OllamaUrl>) -> Response {
         }
     };
     let root = crate::ollama::root(&url);
-    Json(tokio::task::spawn_blocking(move || crate::ollama::status(&root)).await.unwrap_or(Value::Null)).into_response()
+    Json(
+        crate::i18n::blocking(move || {
+            crate::i18n::set_en(en);
+            crate::ollama::status(&root)
+        })
+        .await
+        .unwrap_or(Value::Null),
+    )
+    .into_response()
 }
 
 #[derive(Deserialize)]
@@ -785,18 +827,19 @@ fn check_model_name(m: &str) -> Result<String, &'static str> {
     Ok(m.to_string())
 }
 
-async fn ollama_pull(State(app): S, Json(b): Json<ModelName>) -> Response {
+async fn ollama_pull(State(app): S, h: HeaderMap, Json(b): Json<ModelName>) -> Response {
     let model = match check_model_name(&b.model) {
         Ok(m) => m,
         Err(e) => return err(e),
     };
-    match app.ollama_pull(model) {
+    match app.ollama_pull(model, is_en(&h)) {
         Ok(task) => Json(json!({"task": task})).into_response(),
         Err(e) => err(e),
     }
 }
 
-async fn ollama_delete(State(app): S, Json(b): Json<ModelName>) -> Response {
+async fn ollama_delete(State(app): S, h: HeaderMap, Json(b): Json<ModelName>) -> Response {
+    let en = is_en(&h);
     let model = match check_model_name(&b.model) {
         Ok(m) => m,
         Err(e) => return err(e),
@@ -805,7 +848,12 @@ async fn ollama_delete(State(app): S, Json(b): Json<ModelName>) -> Response {
         let c = app.ai.lock().unwrap();
         crate::ollama::root(if c.provider == "ollama" { &c.base_url } else { "" })
     };
-    match tokio::task::spawn_blocking(move || crate::ollama::delete(&root, &model)).await {
+    match crate::i18n::blocking(move || {
+        crate::i18n::set_en(en);
+        crate::ollama::delete(&root, &model)
+    })
+    .await
+    {
         Ok(r) => done(r),
         Err(e) => err(e),
     }

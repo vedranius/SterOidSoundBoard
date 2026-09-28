@@ -51,7 +51,9 @@ fn err_text(body: &str) -> String {
 }
 
 fn not_running(url: &str, e: &str) -> String {
-    format!("Ollama nije dostupna na {} ({e}). Instalirajte je s ollama.com i pokrenite (ikona u traci ili `ollama serve`).", root(url.split("/api/").next().unwrap_or(url)))
+    let r = root(url.split("/api/").next().unwrap_or(url));
+    tr!("Ollama nije dostupna na {r} ({e}). Instalirajte je s ollama.com i pokrenite (ikona u traci ili `ollama serve`).",
+        "Ollama is not reachable at {r} ({e}). Install it from ollama.com and start it (tray icon or `ollama serve`).")
 }
 
 fn gb(bytes: f64) -> String {
@@ -62,7 +64,8 @@ fn gb(bytes: f64) -> String {
 pub fn capabilities(root: &str, model: &str) -> Result<(bool, Option<u64>)> {
     let r = post(&format!("{root}/api/show"), &json!({"model": model}), Duration::from_secs(15)).map_err(|(code, m)| {
         if code == 404 {
-            anyhow!("Model „{model}” nije preuzet u Ollami — preuzmite ga u AI postavkama (Preuzmi) ili naredbom `ollama pull {model}`.")
+            anyhow!(tr!("Model „{model}” nije preuzet u Ollami — preuzmite ga u AI postavkama (Preuzmi) ili naredbom `ollama pull {model}`.",
+                "Model “{model}” is not downloaded in Ollama — download it in the AI settings (Download) or with `ollama pull {model}`."))
         } else {
             anyhow!(m)
         }
@@ -125,27 +128,29 @@ pub fn loaded(root: &str) -> Vec<Value> {
 
 fn describe_load(m: &Value) -> String {
     let (size, pct) = (m["size"].as_f64().unwrap_or(0.0), m["gpu_pct"].as_f64().unwrap_or(0.0));
-    let ctx = m["context"].as_u64().map(|c| format!(", kontekst {c}")).unwrap_or_default();
+    let ctx = m["context"].as_u64().map(|c| tr!(", kontekst {c}", ", context {c}")).unwrap_or_default();
     if pct >= 99.5 {
-        format!("Model je u memoriji: {} potpuno na GPU-u{ctx} — brzo.", gb(size))
+        tr!("Model je u memoriji: {} potpuno na GPU-u{ctx} — brzo.", "Model loaded: {} fully on the GPU{ctx} — fast.", gb(size))
     } else if pct <= 0.5 {
-        format!("Model je u memoriji: {} samo na CPU-u{ctx} — GPU se ne koristi, bit će sporo (provjerite upravljački program za NVIDIA/CUDA).", gb(size))
+        tr!("Model je u memoriji: {} samo na CPU-u{ctx} — GPU se ne koristi, bit će sporo (provjerite upravljački program za NVIDIA/CUDA).",
+            "Model loaded: {} on the CPU only{ctx} — the GPU is not used, this will be slow (check the NVIDIA/CUDA driver).", gb(size))
     } else {
-        format!("Model je u memoriji: {} — {pct:.0} % na GPU-u, {:.0} % na CPU-u{ctx}. Ne stane cijeli u memoriju grafičke kartice pa je sporije; manji model ili manji kontekst bio bi brži.", gb(size), 100.0 - pct)
+        tr!("Model je u memoriji: {} — {pct:.0} % na GPU-u, {:.0} % na CPU-u{ctx}. Ne stane cijeli u memoriju grafičke kartice pa je sporije; manji model ili manji kontekst bio bi brži.",
+            "Model loaded: {} — {pct:.0} % on the GPU, {:.0} % on the CPU{ctx}. It does not fit in the graphics card memory, so it is slower; a smaller model or context would be faster.", gb(size), 100.0 - pct)
     }
 }
 
 /// Download a model (`ollama pull`), reporting progress.
 pub fn pull(root: &str, model: &str, p: &dyn Progress) -> Result<()> {
-    p.log(&format!("Preuzimam model {model} s ollama.com (preko Ollame na {root})…"));
+    p.log(&tr!("Preuzimam model {model} s ollama.com (preko Ollame na {root})…", "Downloading model {model} from ollama.com (through Ollama at {root})…"));
     let r = post(&format!("{root}/api/pull"), &json!({"model": model, "stream": true}), Duration::from_secs(10 * 60)).map_err(|(_, m)| anyhow!(m))?;
     let mut last_status = String::new();
     let mut last_emit = Instant::now() - Duration::from_secs(1);
     for line in BufReader::new(r.into_reader()).lines() {
         if p.cancelled() {
-            bail!("preuzimanje prekinuto");
+            bail!(tr!("preuzimanje prekinuto", "download stopped"));
         }
-        let line = line.map_err(|e| anyhow!("veza s Ollamom je prekinuta: {e}"))?;
+        let line = line.map_err(|e| anyhow!(tr!("veza s Ollamom je prekinuta: {e}", "connection to Ollama lost: {e}")))?;
         let Ok(v) = serde_json::from_str::<Value>(&line) else { continue };
         if let Some(e) = v["error"].as_str() {
             bail!("Ollama: {e}");
@@ -155,11 +160,11 @@ pub fn pull(root: &str, model: &str, p: &dyn Progress) -> Result<()> {
         let phase = status.split_whitespace().next().unwrap_or_default().to_string();
         if phase != last_status.split_whitespace().next().unwrap_or_default() {
             p.log(&match phase.as_str() {
-                "pulling" if total > 0.0 => format!("Preuzimanje dijela {} ({})", v["digest"].as_str().unwrap_or("").chars().take(19).collect::<String>(), gb(total)),
-                "pulling" => "Dohvaćam popis datoteka modela…".into(),
-                "verifying" => "Provjeravam preuzete datoteke…".into(),
-                "writing" => "Zapisujem model…".into(),
-                "success" => format!("Model {model} je preuzet."),
+                "pulling" if total > 0.0 => tr!("Preuzimanje dijela {} ({})", "Downloading layer {} ({})", v["digest"].as_str().unwrap_or("").chars().take(19).collect::<String>(), gb(total)),
+                "pulling" => tr!("Dohvaćam popis datoteka modela…", "Fetching the model manifest…"),
+                "verifying" => tr!("Provjeravam preuzete datoteke…", "Verifying the downloaded files…"),
+                "writing" => tr!("Zapisujem model…", "Writing the model…"),
+                "success" => tr!("Model {model} je preuzet.", "Model {model} downloaded."),
                 _ => status.clone(),
             });
             last_status = status.clone();
@@ -173,7 +178,7 @@ pub fn pull(root: &str, model: &str, p: &dyn Progress) -> Result<()> {
             return Ok(());
         }
     }
-    bail!("preuzimanje nije završeno (veza prekinuta)")
+    bail!(tr!("preuzimanje nije završeno (veza prekinuta)", "download did not finish (connection lost)"))
 }
 
 pub fn delete(root: &str, model: &str) -> Result<()> {
@@ -236,12 +241,12 @@ pub fn strip_thinking(t: &str) -> String {
 /// Streamed chat: the answer arrives token by token, with a running log.
 pub fn chat(root: &str, model: &str, ctx_setting: u32, system: &str, user: &str, image: Option<&(String, String)>, max_tokens: u64, p: &dyn Progress) -> Result<Answer> {
     let t0 = Instant::now();
-    p.log(&format!("Ollama na {root}, model {model}."));
+    p.log(&tr!("Ollama na {root}, model {model}.", "Ollama at {root}, model {model}."));
     let (vision, model_ctx) = capabilities(root, model)?;
     let image = match image {
         Some(img) if vision => Some(img),
         Some(_) => {
-            p.log("Ovaj model nema vid (vision) — šaljem samo podatke, bez slike sonagrama.");
+            p.log(&tr!("Ovaj model nema vid (vision) — šaljem samo podatke, bez slike sonagrama.", "This model has no vision — sending the data only, without the spectrogram image."));
             None
         }
         None => None,
@@ -250,26 +255,28 @@ pub fn chat(root: &str, model: &str, ctx_setting: u32, system: &str, user: &str,
     let num_predict = max_tokens.min(NUM_PREDICT);
     let num_ctx = context_size(ctx_setting, prompt_tokens, image.is_some(), model_ctx);
     let need = prompt_tokens + if image.is_some() { 1600 } else { 0 };
-    p.log(&format!(
-        "Upit ≈ {prompt_tokens} tokena{}; kontekst {num_ctx} tokena, odgovor do {num_predict} tokena.",
-        image.map(|(_, d)| format!(" + slika ({} kB)", d.len() * 3 / 4 / 1024)).unwrap_or_default()
-    ));
+    let img = image.map(|(_, d)| tr!(" + slika ({} kB)", " + image ({} kB)", d.len() * 3 / 4 / 1024)).unwrap_or_default();
+    p.log(&tr!("Upit ≈ {prompt_tokens} tokena{img}; kontekst {num_ctx} tokena, odgovor do {num_predict} tokena.", "Prompt ≈ {prompt_tokens} tokens{img}; context {num_ctx} tokens, answer up to {num_predict} tokens."));
     if need + 512 > num_ctx {
-        p.log(&format!("UPOZORENJE: kontekst {num_ctx} je premalen za upit (≈ {need}) — Ollama će odrezati početak upita. Povećajte kontekst u AI postavkama ili odaberite „automatski”."));
+        p.log(&tr!("UPOZORENJE: kontekst {num_ctx} je premalen za upit (≈ {need}) — Ollama će odrezati početak upita. Povećajte kontekst u AI postavkama ili odaberite „automatski”.",
+            "WARNING: context {num_ctx} is too small for the prompt (≈ {need}) — Ollama will cut the start of the prompt. Increase the context in the AI settings or choose “automatic”."));
     }
     let loaded_now = loaded(root);
     match loaded_now.iter().find(|m| m["name"].as_str() == Some(model)) {
         Some(m) => p.log(&describe_load(m)),
-        None => p.log("Učitavam model u memoriju (prvi put nakon pokretanja može potrajati)…"),
+        None => p.log(&tr!("Učitavam model u memoriju (prvi put nakon pokretanja može potrajati)…", "Loading the model into memory (the first time after start-up can take a while)…")),
     }
-    p.log("Model čita upit — prvi dio odgovora stiže kad obradi cijeli upit (na CPU-u to može trajati i nekoliko minuta).");
+    p.log(&tr!("Model čita upit — prvi dio odgovora stiže kad obradi cijeli upit (na CPU-u to može trajati i nekoliko minuta).",
+        "The model is reading the prompt — the first words arrive once it has processed all of it (on a CPU this can take several minutes)."));
 
     // report where the model landed (GPU/CPU) as soon as Ollama has loaded it
     let first = Arc::new(AtomicBool::new(false));
     std::thread::scope(|s| -> Result<Answer> {
         let watch_first = first.clone();
         let already = loaded_now.iter().any(|m| m["name"].as_str() == Some(model));
+        let en = crate::i18n::en();
         s.spawn(move || {
+            crate::i18n::set_en(en);
             if already {
                 return;
             }
@@ -277,7 +284,7 @@ pub fn chat(root: &str, model: &str, ctx_setting: u32, system: &str, user: &str,
             while !watch_first.load(Ordering::Relaxed) && start.elapsed() < FIRST_TOKEN_TIMEOUT && !p.cancelled() {
                 std::thread::sleep(Duration::from_millis(1500));
                 if let Some(m) = loaded(root).into_iter().find(|m| m["name"].as_str() == Some(model)) {
-                    p.log(&format!("{} (učitano nakon {:.0} s)", describe_load(&m), start.elapsed().as_secs_f64()));
+                    p.log(&tr!("{} (učitano nakon {:.0} s)", "{} (loaded after {:.0} s)", describe_load(&m), start.elapsed().as_secs_f64()));
                     return;
                 }
             }
@@ -291,25 +298,25 @@ pub fn chat(root: &str, model: &str, ctx_setting: u32, system: &str, user: &str,
 #[allow(clippy::too_many_arguments)]
 fn stream_chat(root: &str, model: &str, system: &str, user: &str, image: Option<&(String, String)>, num_ctx: u64, num_predict: u64, t0: Instant, p: &dyn Progress, first: &AtomicBool) -> Result<Answer> {
     let body = chat_body(model, system, user, image.map(|(_, d)| d.as_str()), num_ctx, num_predict);
-    let r = post(&format!("{root}/api/chat"), &body, FIRST_TOKEN_TIMEOUT).map_err(|(code, m)| anyhow!(if code == 0 { m } else { format!("Ollama je vratila grešku {code}: {m}") }))?;
+    let r = post(&format!("{root}/api/chat"), &body, FIRST_TOKEN_TIMEOUT).map_err(|(code, m)| anyhow!(if code == 0 { m } else { tr!("Ollama je vratila grešku {code}: {m}", "Ollama returned error {code}: {m}") }))?;
     let (mut text, mut n, mut thinking) = (String::new(), 0u64, 0u64);
     let mut gen_start: Option<Instant> = None;
     let mut last_stats = Instant::now();
     for line in BufReader::new(r.into_reader()).lines() {
         if p.cancelled() {
-            bail!("prekinuto");
+            bail!(tr!("prekinuto", "stopped"));
         }
-        let line = line.map_err(|e| anyhow!("veza s Ollamom je prekinuta: {e}"))?;
+        let line = line.map_err(|e| anyhow!(tr!("veza s Ollamom je prekinuta: {e}", "connection to Ollama lost: {e}")))?;
         if line.trim().is_empty() {
             continue;
         }
-        let v: Value = serde_json::from_str(&line).map_err(|e| anyhow!("neispravan odgovor Ollame: {e}"))?;
+        let v: Value = serde_json::from_str(&line).map_err(|e| anyhow!(tr!("neispravan odgovor Ollame: {e}", "invalid answer from Ollama: {e}")))?;
         if let Some(e) = v["error"].as_str() {
             bail!("Ollama: {e}");
         }
         if let Some(th) = v["message"]["thinking"].as_str().filter(|t| !t.is_empty()) {
             if thinking == 0 {
-                p.log(&format!("Model razmišlja prije odgovora (nakon {:.0} s)…", t0.elapsed().as_secs_f64()));
+                p.log(&tr!("Model razmišlja prije odgovora (nakon {:.0} s)…", "The model is thinking before answering (after {:.0} s)…", t0.elapsed().as_secs_f64()));
                 first.store(true, Ordering::Relaxed);
             }
             thinking += 1;
@@ -319,7 +326,7 @@ fn stream_chat(root: &str, model: &str, system: &str, user: &str, image: Option<
             if gen_start.is_none() {
                 gen_start = Some(Instant::now());
                 first.store(true, Ordering::Relaxed);
-                p.log(&format!("Prvi dio odgovora nakon {:.0} s — model piše…", t0.elapsed().as_secs_f64()));
+                p.log(&tr!("Prvi dio odgovora nakon {:.0} s — model piše…", "First words after {:.0} s — the model is writing…", t0.elapsed().as_secs_f64()));
             }
             n += 1;
             text.push_str(c);
@@ -334,29 +341,30 @@ fn stream_chat(root: &str, model: &str, system: &str, user: &str, image: Option<
             let ns = |k: &str| v[k].as_f64().unwrap_or(0.0) / 1e9;
             let (pc, pd, ec, ed) = (v["prompt_eval_count"].as_f64().unwrap_or(0.0), ns("prompt_eval_duration"), v["eval_count"].as_f64().unwrap_or(n as f64), ns("eval_duration"));
             let rate = |c: f64, d: f64| if d > 0.0 { format!("{:.1} tok/s", c / d) } else { "—".into() };
-            p.log(&format!(
+            p.log(&tr!(
                 "Gotovo za {:.0} s: učitavanje modela {:.1} s · upit {pc:.0} tokena za {pd:.1} s ({}) · odgovor {ec:.0} tokena za {ed:.1} s ({}).",
+                "Done in {:.0} s: model loading {:.1} s · prompt {pc:.0} tokens in {pd:.1} s ({}) · answer {ec:.0} tokens in {ed:.1} s ({}).",
                 t0.elapsed().as_secs_f64(),
                 ns("load_duration"),
                 rate(pc, pd),
                 rate(ec, ed)
             ));
             if pc > 0.0 && (pc as u64) + 64 >= num_ctx {
-                p.log("UPOZORENJE: upit je popunio cijeli kontekst — dio je vjerojatno odrezan. Povećajte kontekst.");
+                p.log(&tr!("UPOZORENJE: upit je popunio cijeli kontekst — dio je vjerojatno odrezan. Povećajte kontekst.", "WARNING: the prompt filled the whole context — part of it was probably cut. Increase the context."));
             }
             let reason = v["done_reason"].as_str().unwrap_or("stop").to_string();
             if reason == "length" {
-                p.log("Odgovor je dosegnuo najveću duljinu i skraćen je.");
+                p.log(&tr!("Odgovor je dosegnuo najveću duljinu i skraćen je.", "The answer reached the maximum length and was cut."));
             }
             p.stats(json!({"tokens": ec, "tps": if ed > 0.0 { (ec / ed * 10.0).round() / 10.0 } else { 0.0 }, "prompt_tokens": pc, "prompt_tps": if pd > 0.0 { (pc / pd * 10.0).round() / 10.0 } else { 0.0 }, "elapsed": t0.elapsed().as_secs(), "done": true}));
             let answer = strip_thinking(&text);
             if answer.is_empty() {
-                bail!("model nije vratio tekst odgovora");
+                bail!(tr!("model nije vratio tekst odgovora", "the model returned no answer text"));
             }
             return Ok(Answer { text: answer, model: model.to_string(), truncated: reason == "length" });
         }
     }
-    bail!("Ollama je prekinula vezu prije kraja odgovora")
+    bail!(tr!("Ollama je prekinula vezu prije kraja odgovora", "Ollama closed the connection before the answer was complete"))
 }
 
 #[cfg(test)]

@@ -2,6 +2,28 @@
 
 All notable changes are documented here. Versioning: [SemVer](https://semver.org).
 
+## [0.6.0] - 2026-09-28
+
+The whole application is now **bilingual: Croatian and English**, with a language selector (HR / EN)
+in the header. The choice is remembered per browser; Croatian stays the default.
+
+### Added
+- **Language selector** in the header. Everything follows it: the Music pedalboard (node,
+  parameter and category names), the DigiLingua workstation (pages, sidebars, dialogs, tooltips,
+  placeholders, confirmations, toasts, status lines), clinical presets and their descriptions,
+  measure names and limits, canvas labels (spectrogram/editor axes, legends, readouts), dates
+  and decimal separators (en-GB vs hr-HR).
+- **Server texts in the request language** (`x-lang` header or `?lang=en`): the automatic clinical
+  report and its findings, error messages, AI and Ollama logs, TextGrid tier/label names, annotation kinds.
+- **English AI prompt**: with English selected, the AI gets an English system prompt and data and
+  answers in English; still pseudonymised (never name, code or birth date — covered by a test in both languages).
+- **Exports in the chosen language**: print/PDF report, .txt report, measures CSV headers, progress
+  CSV decimals, and file names.
+
+### Changed
+- Export menu labels in Croatian: "Visina tona (CSV)", "Formanti (CSV)", "Intenzitet (CSV)".
+- Measurements are unchanged: translation touches only text, never the Praat-validated engine.
+
 ## [0.5.0] - 2026-09-28
 
 DigiLingua redesigned after the DigiLingua web app: a clean, professional **light theme** (dark

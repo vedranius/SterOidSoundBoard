@@ -11,7 +11,11 @@ rehabilitation for clinicians; merged from repos vedranius/DigiLingua and vedran
 DigiLingua is never a separate audio path: it is an ordinary Board whose nodes carry `role`
 tags (mic, eq, daf, faf, interrupt, noise, ears) that `web/clinic.js` binds to. New clinical
 features = new generic nodes/engine services + a view, usable by musicians too.
-DigiLingua UI text is Croatian; Music UI is English.
+UI is bilingual HR/EN (`web/i18n.js`: HR↔EN dictionary + regex patterns, DOM MutationObserver
+translator, canvas `fillText` hook, `t()`/`tf()`; language in localStorage `ssb.lang`, header selector).
+Source strings stay Croatian in DigiLingua and English in Music; every new UI text needs a
+dictionary pair (or pattern). Server: `x-lang: en` header / `?lang=en` → task-local request language,
+`tr!("hr", "en", ..)` macro (`crates/app/src/i18n.rs`), `i18n::blocking` keeps it on blocking threads.
 
 ## Hard requirements
 - Real-time audio on every platform is non-negotiable: the audio thread must never lock, allocate, block or log.
@@ -65,10 +69,11 @@ print/PDF report).
 v0.4.1 Ollama built in (model manager, pull with progress, GPU/CPU share), live AI log + streaming + stop.
 v0.5.0 DigiLingua-style professional UI (light default), analysis page, audio upload, saved analyses,
 Praat listings/voice-report export, more spectrogram/pitch/formant display options, live waveform.
-No auth yet (patient data + AI key on LAN!) — PIN/login is top priority in 0.6.
+v0.6.0 bilingual HR/EN UI + server texts + English AI prompt, language selector.
+No auth yet (patient data + AI key on LAN!) — PIN/login is top priority in 0.7.
 Tags can't be pushed from Claude's cloud sessions (git proxy): Vedran pushes `vX.Y.Z` himself.
 
-## Next: v0.6.0
+## Next: v0.7.0
 0. PIN/login (patient data on LAN), optional per-clinic data dir.
 1. Verify CI green on all 3 targets; fix whatever breaks (Windows first).
 2. Windows ASIO (cpal `asio` feature; ASIO SDK in CI, check its license) + WASAPI exclusive option.
@@ -77,5 +82,5 @@ Tags can't be pushed from Claude's cloud sessions (git proxy): Vedran pushes `vX
 5. State-preserving graph edits (reuse processors across Schedule rebuilds so delay tails don't reset).
 6. Multi-channel routing (beyond first 2 channels).
 7. DigiLingua: audit log of who changed patient data (with login), backup/restore of the data dir.
-Roadmap after: 0.6 LV2 hosting + plugin manager, 0.7 control-surface designer + MIDI learn/OSC,
-0.8 AI Lab (Faust), 0.9 RPi image, snapshots, DigiLingua exercise protocols.
+Roadmap after: 0.8 LV2 hosting + plugin manager, 0.9 control-surface designer + MIDI learn/OSC,
+0.10 AI Lab (Faust), 0.11 RPi image, snapshots, DigiLingua exercise protocols.

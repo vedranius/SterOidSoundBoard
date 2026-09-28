@@ -3,7 +3,7 @@
 Real-time audio effects host for Linux, Windows and Raspberry Pi, controlled from any browser
 (desktop, tablet, phone). Inspired by MOD Desktop and Patchbox OS, rebuilt from scratch.
 
-**Status:** 0.5.0 — professional DigiLingua workstation (light/dark), Praat-validated analysis page; Music + DigiLingua modes on one engine; Praat-validated voice analysis with a Praat-style editor, live sonagram, progress tracking and AI opinion for clinicians. See [CHANGELOG](CHANGELOG.md) and the roadmap below.
+**Status:** 0.6.0 — bilingual Croatian / English (language selector in the header); professional DigiLingua workstation (light/dark), Praat-validated analysis page; Music + DigiLingua modes on one engine; Praat-validated voice analysis with a Praat-style editor, live sonagram, progress tracking and AI opinion for clinicians. See [CHANGELOG](CHANGELOG.md) and the roadmap below.
 
 ## Two modes, one engine
 
@@ -88,10 +88,11 @@ Linux `~/.local/share/SterOidSoundBoard`, Windows `%APPDATA%\SterOidSoundBoard`:
 - **0.3** ✅ patient profiles, fluency measures, AI opinion (Claude / OpenAI-compatible / Ollama)
 - **0.4** ✅ Praat-validated analysis + editor, live sonagram, DigiLingua workstation (presets, devices, progress, reports)
 - **0.5** ✅ DigiLingua-style professional UI, audio upload, saved analyses, Praat listings
-- **0.6** PIN/login, native duplex backends (JACK/PipeWire, ASIO), Pisound support, state-preserving graph edits
-- **0.7** LV2 plugin hosting + plugin manager (open-source plugin catalog)
-- **0.8** Control-surface designer (custom tablet layouts), MIDI learn, OSC
-- **0.9** AI Lab: describe an effect → Faust DSP generated, compiled (JIT) and loaded live
+- **0.6** ✅ bilingual UI (HR / EN), English reports, exports and AI prompt
+- **0.7** PIN/login, native duplex backends (JACK/PipeWire, ASIO), Pisound support, state-preserving graph edits
+- **0.8** LV2 plugin hosting + plugin manager (open-source plugin catalog)
+- **0.9** Control-surface designer (custom tablet layouts), MIDI learn, OSC
+- **0.10** AI Lab: describe an effect → Faust DSP generated, compiled (JIT) and loaded live
   (Claude / OpenAI-compatible / Ollama, user's choice)
 - **1.0** Raspberry Pi image, snapshots, DigiLingua exercise protocols
 
