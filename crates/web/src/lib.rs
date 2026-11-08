@@ -18,7 +18,8 @@ use steroid_clinic::prompt;
 use steroid_engine::analysis::{self, AnalysisSettings, VoiceReport};
 use steroid_engine::graph::{Board, Connection, LiveNode, NodeDesc, Schedule};
 use steroid_engine::live::{LiveAnalyzer, SPEC_DB_MIN, SPEC_DB_STEP};
-use steroid_engine::nodes::{new_buf, Buf, NodeKind, MAX_BLOCK};
+use steroid_engine::nodes::{new_buf, Buf, NodeKind, TapRing, MAX_BLOCK};
+use std::sync::Arc;
 use steroid_engine::templates;
 
 // ------------------------------------------------------------------ memory + calls
@@ -27,7 +28,8 @@ thread_local! {
     static OUT: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
     /// Samples of the recording loaded with `ssb_load_wav` (mono, louder channel).
     static WAV: RefCell<(Vec<f32>, u32)> = const { RefCell::new((Vec::new(), 0)) };
-    static LIVE: RefCell<Option<LiveAnalyzer>> = const { RefCell::new(None) };
+    /// Live analyzers by key ("" = the main sonagram, node id = a sonagram node).
+    static LIVE: RefCell<(String, HashMap<String, LiveAnalyzer>)> = RefCell::new((String::new(), HashMap::new()));
     /// Scratch buffer JS writes samples into (live analyzer input).
     static SCRATCH: RefCell<Vec<f32>> = const { RefCell::new(Vec::new()) };
     static DSP: RefCell<Option<Dsp>> = const { RefCell::new(None) };
@@ -248,6 +250,13 @@ fn call(method: &str, a: Value) -> Result<Value, String> {
                 t => Err(format!("unknown type {t}")),
             }
         }
+        "protocols" => Ok(json!({"tasks": steroid_clinic::protocol::TASKS, "protocols": steroid_clinic::protocol::PROTOCOLS})),
+        "voice_profile" => {
+            let items: Vec<(Recording, VoiceReport)> = from(a["items"].clone())?;
+            let refs: Vec<(&Recording, &VoiceReport)> = items.iter().map(|(r, v)| (r, v)).collect();
+            to(steroid_clinic::protocol::voice_profile(&refs, a["calibration_db"].as_f64().map(|v| v as f32)))
+        }
+        "routing_sanitized" => to(from::<steroid_engine::routing::Routing>(a)?.sanitized()),
         "age_at" => Ok(json!(clinic::age_at(a["birth"].as_str().unwrap_or_default(), a["at"].as_u64().unwrap_or(0)))),
         "date_str" => Ok(json!(clinic::date_str(a.as_u64().unwrap_or(0)))),
         "settings_sanitized" => {
@@ -315,9 +324,26 @@ fn call(method: &str, a: Value) -> Result<Value, String> {
             })
         }
         // ---- live sonagram
+        "live_select" => LIVE.with(|l| {
+            let mut l = l.borrow_mut();
+            let key = a["key"].as_str().unwrap_or_default().to_string();
+            let sr = a["sr"].as_f64().unwrap_or(48000.0) as f32;
+            let an = l.1.entry(key.clone()).or_insert_with(|| LiveAnalyzer::new(sr));
+            if (an.sample_rate() - sr).abs() > 0.5 {
+                *an = LiveAnalyzer::new(sr);
+            }
+            l.0 = key;
+            Ok(Value::Null)
+        }),
+        "live_drop" => LIVE.with(|l| {
+            let keep: Vec<String> = from(a)?;
+            l.borrow_mut().1.retain(|k, _| k.is_empty() || keep.contains(k));
+            Ok(Value::Null)
+        }),
         "live_frames" => LIVE.with(|l| {
             let mut l = l.borrow_mut();
-            let Some(an) = l.as_mut() else { return Ok(Value::Null) };
+            let (cur, map) = &mut *l;
+            let Some(an) = map.get_mut(cur.as_str()) else { return Ok(Value::Null) };
             if let Some(w) = a["win"].as_f64() {
                 an.set_window(w as f32);
             }
@@ -356,6 +382,11 @@ fn call(method: &str, a: Value) -> Result<Value, String> {
             let ln = d.live.get(a["node"].as_str().unwrap_or_default()).ok_or("no such node")?;
             ln.bypass.store(a["on"].as_bool().unwrap_or(false), std::sync::atomic::Ordering::Relaxed);
             Ok(Value::Null)
+        }),
+        "dsp_taps" => DSP.with(|d| {
+            let d = d.borrow();
+            let d = d.as_ref().ok_or("dsp not started")?;
+            Ok(json!(d.taps.iter().map(|t| json!({"id": t.0, "kind": t.3})).collect::<Vec<_>>()))
         }),
         "dsp_meters" => DSP.with(|d| {
             let d = d.borrow();
@@ -418,7 +449,11 @@ pub extern "C" fn ssb_scratch(n: usize) -> *mut f32 {
 
 #[no_mangle]
 pub extern "C" fn ssb_live_reset(sr: f32) {
-    LIVE.with(|l| *l.borrow_mut() = Some(LiveAnalyzer::new(sr)));
+    LIVE.with(|l| {
+        let mut l = l.borrow_mut();
+        l.0 = String::new();
+        l.1.insert(String::new(), LiveAnalyzer::new(sr));
+    });
 }
 
 /// Feed `n` samples from the scratch buffer to the live analyzer.
@@ -427,7 +462,9 @@ pub extern "C" fn ssb_live_push(n: usize) {
     SCRATCH.with(|s| {
         let s = s.borrow();
         LIVE.with(|l| {
-            if let Some(a) = l.borrow_mut().as_mut() {
+            let mut l = l.borrow_mut();
+            let (cur, map) = &mut *l;
+            if let Some(a) = map.get_mut(cur.as_str()) {
                 a.push(&s[..n.min(s.len())]);
             }
         })
@@ -439,6 +476,9 @@ pub extern "C" fn ssb_live_push(n: usize) {
 struct Dsp {
     sr: f32,
     live: HashMap<String, LiveNode>,
+    /// Display nodes: (id, ring, read position, kind).
+    taps: Vec<(String, Arc<TapRing>, usize, NodeKind)>,
+    tap_buf: Vec<f32>,
     sched: Option<Schedule>,
     inbuf: Buf,
     outbuf: Buf,
@@ -449,6 +489,9 @@ impl Dsp {
         let live: HashMap<String, LiveNode> = b.nodes.iter().map(|n| (n.id.clone(), LiveNode::from_desc(n))).collect();
         let s = Schedule::build(b, &live, self.sr)?;
         self.sched = Some(s);
+        let mut taps: Vec<_> = live.iter().filter_map(|(id, n)| n.tap.clone().map(|r| (id.clone(), r, 0usize, n.kind))).collect();
+        taps.sort_by(|a, b| a.0.cmp(&b.0));
+        self.taps = taps;
         self.live = live;
         Ok(())
     }
@@ -457,7 +500,28 @@ impl Dsp {
 /// Start the DSP engine at the AudioContext sample rate (empty board).
 #[no_mangle]
 pub extern "C" fn dsp_init(sr: f32) {
-    DSP.with(|d| *d.borrow_mut() = Some(Dsp { sr, live: HashMap::new(), sched: None, inbuf: new_buf(), outbuf: new_buf() }));
+    DSP.with(|d| *d.borrow_mut() = Some(Dsp { sr, live: HashMap::new(), taps: vec![], tap_buf: Vec::with_capacity(TapRing::CAP), sched: None, inbuf: new_buf(), outbuf: new_buf() }));
+}
+
+/// Read what display node `i` (order of `dsp_taps`) published since the last
+/// read; returns the count, samples at `dsp_tap_ptr()`.
+#[no_mangle]
+pub extern "C" fn dsp_tap_read(i: usize) -> usize {
+    DSP.with(|d| {
+        let mut d = d.borrow_mut();
+        let Some(d) = d.as_mut() else { return 0 };
+        let Dsp { taps, tap_buf, .. } = d;
+        tap_buf.clear();
+        if let Some((_, ring, pos, _)) = taps.get_mut(i) {
+            ring.read(pos, tap_buf);
+        }
+        tap_buf.len()
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn dsp_tap_ptr() -> *const f32 {
+    DSP.with(|d| d.borrow().as_ref().map(|d| d.tap_buf.as_ptr()).unwrap_or(std::ptr::null()))
 }
 
 /// Input buffer: `ch` 0 = left, 1 = right, MAX_BLOCK floats each.

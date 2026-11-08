@@ -47,9 +47,11 @@
 <section id="aiPanel" class="panel hidden" lang="hr">
   <label>AI servis <select id="aiProvider">
     <option value="anthropic">Anthropic Claude</option>
-    <option value="openai">OpenAI-kompatibilan (OpenAI, LM Studio, vLLM…)</option>
+    <option value="openai">OpenAI-kompatibilan (LM Studio, OpenRouter, OpenCode, Groq…)</option>
     <option value="ollama">Ollama (lokalno, besplatno, podaci ne napuštaju računalo)</option></select></label>
+  <label id="aiPresetL" class="hidden">Gotove postavke <select id="aiPreset"></select></label>
   <label>Model <input id="aiModel" size="22" list="aiModelList"><datalist id="aiModelList"></datalist></label>
+  <button id="aiModels" class="small" title="Dohvati popis modela sa servisa">⟳ Modeli</button>
   <label>Adresa <input id="aiUrl" size="30"></label>
   <label id="aiKeyL">API ključ <input id="aiKey" type="password" size="24" autocomplete="off"></label>
   <label class="chk"><input type="checkbox" id="aiImage"> šalji sliku sonagrama</label>
@@ -94,11 +96,11 @@
   <section class="cl-main">
     <div class="cl-head">
       <button id="clClientsToggle" class="icon" title="Klijenti"><span data-ic="panel-left"></span></button>
-      <div class="cl-title"><div class="t"><span id="clPageIcon" data-ic="sliders"></span><span id="clPageTitle">Real-time audio</span></div><div class="s" id="clPageSub">Slušna povratna veza, EQ, DAF/FAF, šum</div></div>
+      <div class="cl-title"><div class="t"><span id="clPageIcon" data-ic="sliders"></span><span id="clPageTitle">DigiLingua FILTER</span></div><div class="s" id="clPageSub">Slušna povratna veza, EQ, DAF/FAF, šum</div></div>
       <button class="client-chip" id="clChip" title="Odaberi klijenta"><span class="avatar" id="clChipAv">?</span><span id="clChipName">odaberite klijenta</span></button>
       <span id="clPresetBadge" class="badge hidden" title="Trenutni klinički preset"></span>
       <span class="grow"></span>
-      <nav class="seg tabs" id="clTabs"><button data-tab="rehab" class="sel"><span data-ic="sliders"></span>Real-time audio</button><button data-tab="analiza"><span data-ic="activity"></span>Analiza glasa</button><button data-tab="napredak"><span data-ic="trending"></span>Napredak</button></nav>
+      <nav class="seg tabs" id="clTabs"><button data-tab="karton"><span data-ic="user"></span>Karton</button><button data-tab="rehab" class="sel"><span data-ic="sliders"></span>DigiLingua FILTER</button><button data-tab="analiza"><span data-ic="activity"></span>Analiza</button><button data-tab="napredak"><span data-ic="trending"></span>Napredak</button></nav>
       <button id="clHelpBtn" class="icon" title="Tipkovnički prečaci (?)"><span data-ic="keyboard"></span></button>
       <button id="clSettingsBtn" class="icon" title="Postavke ustanove, analize i kalibracije"><span data-ic="settings"></span></button>
       <button id="clAudioBtn" class="pri" title="Pokreni / zaustavi zvuk (razmaknica)">▶ Pokreni audio</button>
@@ -112,8 +114,12 @@
 
     <div class="cl-body">
       <div class="cl-pages">
-        <!-- ================= Real-time audio -->
+        <!-- ================= Karton (patient chart) -->
+        <div id="clKarton" class="page hidden"></div>
+
+        <!-- ================= DigiLingua FILTER (real-time auditory feedback) -->
         <div id="clRehab" class="page">
+          <div id="flBar" class="card2 fl-bar"></div>
           <div class="cl-status">
             <div class="card2">
               <div class="h row"><span data-ic="mic"></span><span class="grow">Ulazni uređaj</span><button id="clDevRefresh" class="icon small" title="Osvježi popis uređaja (D)"><span data-ic="refresh"></span></button></div>
@@ -137,6 +143,7 @@
               <div id="clAudioErr" class="err small"></div>
             </div>
           </div>
+          <div class="card2" id="flMatrix"></div>
           <div class="cl-live" id="rtLiveRow">
             <div class="card2 cl-sono" id="clLiveCard">
               <div class="h row"><span data-ic="waves"></span><span class="grow" id="clLiveTitle">Spektrogram u stvarnom vremenu</span>
@@ -174,6 +181,7 @@
             </div>
             <div class="cl-grid" id="clModules"></div>
           </div>
+          <div class="card2" id="flExtra"></div>
         </div>
 
         <!-- ================= Analiza glasa -->
@@ -188,6 +196,7 @@
               <button id="clUploadBtn"><span data-ic="upload"></span>Učitaj audio</button>
               <input id="clUpload" type="file" accept="audio/*,.wav,.mp3,.m4a,.ogg,.flac,.webm" class="hidden">
             </div>
+            <div id="clPrompter" class="prompter hidden"></div>
             <div id="anLiveSlot" class="an-live"></div>
             <div id="clRecInfo" class="dim small">Za analizu glasa: produženi vokal /a/ 3–5 s, stalna udaljenost od mikrofona (npr. 30 cm), tiha prostorija. Za mucanje: čitanje i spontani govor ≥ 300 slogova. Učitajte i postojeće snimke (WAV za točnu analizu; MP3/M4A/OGG se pretvaraju).</div>
           </div>
@@ -229,6 +238,7 @@
               <button data-t="oznake"><span data-ic="tag"></span>Anotacija</button>
               <button data-t="spremljene"><span data-ic="archive"></span>Spremljene analize <span id="anSavedN" class="dim"></span></button>
               <button data-t="postavke"><span data-ic="settings"></span>Postavke prikaza</button>
+              <button data-t="ocjena"><span data-ic="edit"></span>Perceptivna ocjena</button>
               <button data-t="ai"><span data-ic="sparkles"></span>AI mišljenje</button>
             </nav>
             <div class="an-tab" data-t="mjere">
@@ -252,6 +262,7 @@
                 <div class="dim small">„Spremi analizu” trajno bilježi odsječak, postavke i sve mjere — vidljivo i u povijesti sesije.</div></div>
             </div>
             <div class="an-tab hidden" data-t="postavke"><div class="card2" id="anSettingsHost"></div></div>
+            <div class="an-tab hidden" data-t="ocjena" id="anRating"></div>
             <div class="an-tab hidden" data-t="ai">
               <div class="card2" id="anAi">
                 <div class="h row"><span class="grow">AI mišljenje</span><span id="anAiWho" class="dim"></span><button id="anAiCfg" class="small"><span data-ic="settings"></span>AI postavke</button></div>
@@ -300,6 +311,8 @@
           </div>
           <button id="clSessBtn" class="pri wide">Započni sesiju</button>
           <div id="clSessPreset" class="dim small"></div>
+          <div id="clSessStart" class="sess-start"></div>
+          <div id="clSessExtra"></div>
           <label class="side-label">Bilješke sesije</label>
           <textarea id="clSessNotes" rows="4" placeholder="Dodaj bilješke o ovoj terapijskoj sesiji…" disabled></textarea>
           <div class="dim small">Bilješke se spremaju automatski.</div>
@@ -347,6 +360,7 @@
         <label>Snimka kalibratora<select name="cal_rec"></select></label>
       </div>
       <button type="button" id="cCalc" class="small">Izračunaj pomak iz snimke</button> <span id="cCalcInfo" class="dim small"></span></fieldset>
+    <fieldset id="mcpBox"><legend>AI asistenti (MCP) — Claude, ChatGPT…</legend></fieldset>
     <div class="row"><button type="submit" class="pri">Spremi</button><span class="grow"></span><span class="dim small">Postavke vrijede za sve korisnike ovog računala.</span></div>
   </form>
 </div>
@@ -399,5 +413,6 @@
 <script src="sono.js"></script>
 <script src="editor.js"></script>
 <script src="clinic.js"></script>
+<script src="practice.js"></script>
 </body>
 </html>

@@ -31,6 +31,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/node-types", get(|| async { Json(NodeKind::ALL.iter().map(|k| k.info()).collect::<Vec<_>>()) }))
         .route("/api/audio/start", post(audio_start))
         .route("/api/audio/stop", post(audio_stop))
+        .route("/api/audio/routing", put(audio_routing))
         .route("/api/board", get(board))
         .route("/api/nodes", post(add_node))
         .route("/api/nodes/{id}", delete(remove_node))
@@ -61,6 +62,13 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/patients/{id}/progress", get(progress))
         .route("/api/sessions/{id}/detail", get(session_detail))
         .route("/api/sessions/{id}/apply", post(session_apply))
+        .route("/api/protocols", get(protocols))
+        .route("/api/patients/{id}/profile", get(voice_profile))
+        .route("/api/patients/{id}/chart", get(patient_chart))
+        .route("/api/patients/{id}/questionnaires", get(list_questionnaires).post(add_questionnaire))
+        .route("/api/questionnaires/{id}", delete(delete_questionnaire))
+        .route("/api/patients/{id}/notes", get(list_notes).post(add_note))
+        .route("/api/notes/{id}", delete(delete_note))
         .route("/api/clinic/settings", get(get_clinic_settings).put(put_clinic_settings))
         .route("/api/clinic/annotation-kinds", get(annotation_kinds))
         .route("/api/clinic/presets", get(list_clinical_presets).post(save_clinical_preset))
@@ -68,6 +76,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/clinic/presets/{id}/load", post(load_clinical_preset))
         .route("/api/ai/config", get(ai_config).put(set_ai_config))
         .route("/api/ai/test", post(ai_test))
+        .route("/api/ai/models", get(ai_models))
         .route("/api/recordings/{id}/ai/preview", post(ai_preview).layer(DefaultBodyLimit::max(12 << 20)))
         .route("/api/recordings/{id}/ai", get(ai_list).post(ai_run).layer(DefaultBodyLimit::max(12 << 20)))
         .route("/api/ai/tasks", get(ai_tasks))
@@ -78,6 +87,8 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/ai/ollama/delete", post(ollama_delete))
         .route("/api/ai-reports/{id}", delete(ai_delete))
         .route("/ws", get(ws))
+        .route("/mcp", post(mcp_http).get(|| async { StatusCode::METHOD_NOT_ALLOWED }).delete(|| async { StatusCode::METHOD_NOT_ALLOWED }))
+        .route("/api/mcp/config", get(mcp_config).put(set_mcp_config))
         .fallback(static_file)
         .layer(axum::middleware::from_fn(lang_scope))
         .with_state(app)
@@ -104,6 +115,8 @@ async fn status(State(app): S) -> Json<Value> {
         "mute": app.stats.mute.load(Ordering::Relaxed),
         "preset": *app.current_preset.lock().unwrap(),
         "recording": i.recording.is_some(),
+        "bypass_all": app.stats.bypass.load(Ordering::Relaxed),
+        "edition": "desktop",
     }))
 }
 
@@ -115,6 +128,13 @@ async fn audio_start(State(app): S, Json(cfg): Json<AudioConfig>) -> Response {
     match crate::i18n::blocking(move || app.start_audio(Some(cfg))).await {
         Ok(Ok(info)) => Json(info).into_response(),
         Ok(Err(e)) => err(e),
+        Err(e) => err(e),
+    }
+}
+
+async fn audio_routing(State(app): S, Json(r): Json<steroid_engine::routing::Routing>) -> Response {
+    match app.set_routing(r) {
+        Ok(r) => Json(r).into_response(),
         Err(e) => err(e),
     }
 }
@@ -276,7 +296,8 @@ async fn list_sessions(State(app): S, Query(q): Query<ByPatient>) -> Json<Value>
         .filter(|s| q.patient.is_none() || q.patient.as_ref() == Some(&s.patient_id))
         .map(|s| {
             let recs = c.recordings.iter().filter(|r| r.session_id.as_deref() == Some(&s.id)).count();
-            json!({"id": s.id, "patient_id": s.patient_id, "start": s.start, "end": s.end, "notes": s.notes, "preset": s.preset, "recordings": recs})
+            json!({"id": s.id, "patient_id": s.patient_id, "start": s.start, "end": s.end, "notes": s.notes, "preset": s.preset, "recordings": recs,
+                   "kind": s.kind, "next_date": s.next_date, "tasks_done": s.tasks.iter().filter(|t| t.done).count(), "tasks": s.tasks.len()})
         })
         .collect();
     v.reverse();
@@ -284,23 +305,10 @@ async fn list_sessions(State(app): S, Query(q): Query<ByPatient>) -> Json<Value>
 }
 
 async fn session_detail(State(app): S, Path(id): Path<String>) -> Response {
-    let c = app.clinic.lock().unwrap();
-    let Some(s) = c.sessions.iter().find(|s| s.id == id) else { return err("no such session") };
-    let nodes: Vec<Value> = s
-        .board
-        .as_ref()
-        .map(|b| {
-            b.nodes
-                .iter()
-                .filter(|n| n.role.is_some())
-                .map(|n| json!({"role": n.role, "kind": n.kind, "bypass": n.bypass, "params": n.params}))
-                .collect()
-        })
-        .unwrap_or_default();
-    let recs: Vec<&clinic::Recording> = c.recordings.iter().filter(|r| r.session_id.as_deref() == Some(&s.id)).collect();
-    Json(json!({"id": s.id, "patient_id": s.patient_id, "start": s.start, "end": s.end, "notes": s.notes,
-                "preset": s.preset, "has_board": s.board.is_some(), "nodes": nodes, "recordings": recs}))
-    .into_response()
+    match app.session_detail(&id) {
+        Ok(v) => Json(v).into_response(),
+        Err(e) => err(e),
+    }
 }
 
 async fn session_apply(State(app): S, Path(id): Path<String>) -> Response {
@@ -316,27 +324,65 @@ async fn session_apply(State(app): S, Path(id): Path<String>) -> Response {
 #[derive(Deserialize)]
 struct StartSession {
     patient_id: String,
+    #[serde(default)]
+    kind: String,
+    /// Protocol template id (fills the task list).
+    #[serde(default)]
+    protocol: Option<String>,
 }
 
 async fn start_session(State(app): S, Json(b): Json<StartSession>) -> Response {
-    match app.start_session(&b.patient_id) {
-        Ok(s) => Json(json!({"id": s.id, "patient_id": s.patient_id, "start": s.start, "end": s.end, "notes": s.notes})).into_response(),
+    match app.start_session(&b.patient_id, &b.kind, b.protocol.as_deref()) {
+        Ok(s) => Json(json!({"id": s.id, "patient_id": s.patient_id, "start": s.start, "end": s.end, "notes": s.notes, "kind": s.kind, "tasks": s.tasks})).into_response(),
         Err(e) => err(e),
     }
 }
 
-#[derive(Deserialize)]
+/// Session edit: every field optional.
+#[derive(Deserialize, Default)]
+#[serde(default)]
 struct Notes {
-    #[serde(default)]
     notes: Option<String>,
+    kind: Option<String>,
+    soap: Option<clinic::Soap>,
+    tasks: Option<Vec<clinic::SessionTask>>,
+    homework: Option<String>,
+    next_date: Option<String>,
 }
 
-fn session_edit(app: &App, id: &str, notes: Option<String>, stop: bool) -> anyhow::Result<()> {
+fn session_edit(app: &App, id: &str, e: Notes, stop: bool) -> anyhow::Result<()> {
     let mut c = app.clinic.lock().unwrap();
     let s = c.sessions.iter_mut().find(|s| s.id == id).ok_or_else(|| anyhow::anyhow!("no such session"))?;
-    if let Some(n) = notes {
+    if let Some(n) = e.notes {
         anyhow::ensure!(n.len() <= 100_000, "notes too long");
         s.notes = n;
+    }
+    if let Some(k) = e.kind {
+        s.kind = k.chars().take(40).collect();
+    }
+    if let Some(x) = e.soap {
+        let long = [&x.subjective, &x.objective, &x.assessment, &x.plan].iter().any(|t| t.len() > 50_000);
+        anyhow::ensure!(!long, "SOAP too long");
+        s.soap = x;
+    }
+    if let Some(t) = e.tasks {
+        anyhow::ensure!(t.len() <= 100, "too many tasks");
+        s.tasks = t
+            .into_iter()
+            .map(|mut x| {
+                x.task = x.task.chars().take(200).collect();
+                x.note = x.note.chars().take(2000).collect();
+                x.id = x.id.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-').take(40).collect();
+                x
+            })
+            .collect();
+    }
+    if let Some(h) = e.homework {
+        anyhow::ensure!(h.len() <= 50_000, "homework too long");
+        s.homework = h;
+    }
+    if let Some(d) = e.next_date {
+        s.next_date = d.chars().take(20).collect();
     }
     if stop && s.end.is_none() {
         s.end = Some(clinic::now_ms());
@@ -345,11 +391,120 @@ fn session_edit(app: &App, id: &str, notes: Option<String>, stop: bool) -> anyho
 }
 
 async fn update_session(State(app): S, Path(id): Path<String>, Json(n): Json<Notes>) -> Response {
-    done(session_edit(&app, &id, n.notes, false))
+    done(session_edit(&app, &id, n, false))
 }
 
 async fn stop_session(State(app): S, Path(id): Path<String>, Json(n): Json<Notes>) -> Response {
-    done(session_edit(&app, &id, n.notes, true))
+    done(session_edit(&app, &id, n, true))
+}
+
+async fn protocols() -> Json<Value> {
+    use steroid_clinic::protocol;
+    Json(json!({"tasks": protocol::TASKS, "protocols": protocol::PROTOCOLS}))
+}
+
+#[derive(Deserialize)]
+struct ProfileQuery {
+    session: Option<String>,
+}
+
+async fn voice_profile(State(app): S, Path(id): Path<String>, Query(q): Query<ProfileQuery>) -> Response {
+    match crate::i18n::blocking(move || app.voice_profile(&id, q.session.as_deref())).await {
+        Ok(Ok(v)) => Json(v).into_response(),
+        Ok(Err(e)) => err(e),
+        Err(e) => err(e),
+    }
+}
+
+async fn patient_chart(State(app): S, Path(id): Path<String>) -> Response {
+    match app.chart(&id) {
+        Ok(v) => Json(v).into_response(),
+        Err(e) => err(e),
+    }
+}
+
+async fn list_questionnaires(State(app): S, Path(id): Path<String>) -> Json<Value> {
+    let c = app.clinic.lock().unwrap();
+    let mut v: Vec<&clinic::Questionnaire> = c.questionnaires.iter().filter(|q| q.patient_id == id).collect();
+    v.sort_by_key(|q| q.date);
+    Json(json!(v))
+}
+
+#[derive(Deserialize)]
+struct QuestIn {
+    kind: String,
+    #[serde(default)]
+    date: Option<u64>,
+    score: f32,
+    #[serde(default)]
+    max: Option<f32>,
+    #[serde(default)]
+    note: String,
+}
+
+async fn add_questionnaire(State(app): S, Path(id): Path<String>, Json(b): Json<QuestIn>) -> Response {
+    if !b.score.is_finite() || b.kind.trim().is_empty() {
+        return err(tr!("neispravan upitnik", "invalid questionnaire"));
+    }
+    let mut c = app.clinic.lock().unwrap();
+    if !c.patients.iter().any(|p| p.id == id) {
+        return err("no such patient");
+    }
+    let q = clinic::Questionnaire {
+        id: clinic::new_id("q"),
+        patient_id: id,
+        kind: b.kind.trim().chars().take(60).collect(),
+        date: b.date.unwrap_or_else(clinic::now_ms),
+        score: b.score,
+        max: b.max.filter(|m| m.is_finite()),
+        note: b.note.chars().take(5000).collect(),
+    };
+    c.questionnaires.push(q.clone());
+    match app.save_clinic(&c) {
+        Ok(()) => Json(q).into_response(),
+        Err(e) => err(e),
+    }
+}
+
+async fn delete_questionnaire(State(app): S, Path(id): Path<String>) -> Response {
+    let mut c = app.clinic.lock().unwrap();
+    let n = c.questionnaires.len();
+    c.questionnaires.retain(|q| q.id != id);
+    if c.questionnaires.len() == n {
+        return err("no such questionnaire");
+    }
+    done(app.save_clinic(&c))
+}
+
+async fn list_notes(State(app): S, Path(id): Path<String>) -> Json<Value> {
+    let c = app.clinic.lock().unwrap();
+    let mut v: Vec<&clinic::ClinicalNote> = c.notes.iter().filter(|n| n.patient_id == id).collect();
+    v.sort_by_key(|n| std::cmp::Reverse(n.created));
+    Json(json!(v))
+}
+
+#[derive(Deserialize)]
+struct NoteIn {
+    #[serde(default)]
+    title: String,
+    text: String,
+}
+
+async fn add_note(State(app): S, Path(id): Path<String>, Json(b): Json<NoteIn>) -> Response {
+    match app.add_note(&id, &b.title, &b.text, "clinician") {
+        Ok(n) => Json(n).into_response(),
+        Err(e) => err(e),
+    }
+}
+
+async fn delete_note(State(app): S, Path(id): Path<String>) -> Response {
+    let mut c = app.clinic.lock().unwrap();
+    let n = c.notes.len();
+    c.notes.retain(|x| x.id != id);
+    if c.notes.len() == n {
+        return err("no such note");
+    }
+    done(app.save_clinic(&c))
 }
 
 // ------------------------------------------------------------- recording + analysis
@@ -398,6 +553,14 @@ struct RecordingEdit {
     annotations: Option<Vec<clinic::Annotation>>,
     /// Manual syllable count; 0 clears it.
     syllables: Option<u32>,
+    /// Perceptual rating (GRBAS / CAPE-V); null clears it.
+    #[serde(default, deserialize_with = "some_null")]
+    rating: Option<Option<clinic::Rating>>,
+}
+
+/// `Some(None)` for an explicit null, `None` when the field is absent.
+fn some_null<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(d: D) -> Result<Option<Option<T>>, D::Error> {
+    Option::<T>::deserialize(d).map(Some)
 }
 
 fn check_annotations(a: &[clinic::Annotation], duration: f32) -> Result<(), String> {
@@ -438,6 +601,16 @@ async fn update_recording(State(app): S, Path(id): Path<String>, Json(e): Json<R
     }
     if let Some(n) = e.syllables {
         r.syllables = (n > 0).then_some(n.min(1_000_000));
+    }
+    if let Some(rt) = e.rating {
+        r.rating = rt.map(|mut x| {
+            x.grbas = x.grbas.map(|g| g.map(|v| v.min(3)));
+            x.capev = x.capev.map(|c| c.map(|v| v.filter(|v| v.is_finite()).map(|v| v.clamp(0.0, 100.0))));
+            x.rater = x.rater.chars().take(200).collect();
+            x.note = x.note.chars().take(5000).collect();
+            x.updated = clinic::now_ms();
+            x
+        });
     }
     done(app.save_clinic(&c))
 }
@@ -691,6 +864,15 @@ async fn set_ai_config(State(app): S, Json(b): Json<AiConfigIn>) -> Response {
     }
 }
 
+async fn ai_models(State(app): S) -> Response {
+    let cfg = app.ai.lock().unwrap().clone();
+    match crate::i18n::blocking(move || crate::ai::list_models(&cfg)).await {
+        Ok(Ok(v)) => Json(v).into_response(),
+        Ok(Err(e)) => err(e),
+        Err(e) => err(e),
+    }
+}
+
 async fn ai_test(State(app): S, h: HeaderMap) -> Response {
     let cfg = app.ai.lock().unwrap().clone();
     let en = is_en(&h);
@@ -876,6 +1058,81 @@ async fn ai_delete(State(app): S, Path(id): Path<String>) -> Response {
     done(app.save_clinic(&c))
 }
 
+// ------------------------------------------------------------- MCP (AI assistants)
+/// Streamable HTTP transport (JSON responses). Bearer token; browsers'
+/// cross-site requests (DNS rebinding) are refused by the Origin check.
+#[derive(Deserialize)]
+struct TokenQuery {
+    token: Option<String>,
+}
+
+async fn mcp_http(State(app): S, h: HeaderMap, Query(q): Query<TokenQuery>, body: String) -> Response {
+    let cfg = app.mcp.lock().unwrap().clone();
+    if let Some(o) = h.get(header::ORIGIN).and_then(|v| v.to_str().ok()) {
+        let host = o.split("://").nth(1).unwrap_or("").split([':', '/']).next().unwrap_or("");
+        if !(host == "localhost" || host == "127.0.0.1" || host == "[::1]") {
+            return (StatusCode::FORBIDDEN, "origin not allowed").into_response();
+        }
+    }
+    // header, or ?token= for clients that cannot send headers (e.g. ChatGPT connectors)
+    let presented = h.get(header::AUTHORIZATION).and_then(|v| v.to_str().ok()).and_then(|v| v.strip_prefix("Bearer ")).map(str::to_string).or(q.token).unwrap_or_default();
+    if !crate::mcp::token_ok(&cfg, presented.trim()) {
+        return (StatusCode::UNAUTHORIZED, [(header::WWW_AUTHENTICATE, "Bearer")], "missing or wrong token").into_response();
+    }
+    if !cfg.enabled {
+        return (StatusCode::FORBIDDEN, "MCP is switched off in the app's settings").into_response();
+    }
+    let client = h.get("x-mcp-client").and_then(|v| v.to_str().ok()).or_else(|| h.get(header::USER_AGENT).and_then(|v| v.to_str().ok())).unwrap_or("http").to_string();
+    let msg: Value = match serde_json::from_str(&body) {
+        Ok(v) => v,
+        Err(e) => return Json(json!({"jsonrpc": "2.0", "id": null, "error": {"code": -32700, "message": e.to_string()}})).into_response(),
+    };
+    let r = crate::i18n::blocking(move || {
+        if let Some(batch) = msg.as_array() {
+            let out: Vec<Value> = batch.iter().filter_map(|m| crate::mcp::handle(&app, m, &client)).collect();
+            (!out.is_empty()).then(|| json!(out))
+        } else {
+            crate::mcp::handle(&app, &msg, &client)
+        }
+    })
+    .await;
+    match r {
+        Ok(Some(v)) => Json(v).into_response(),
+        Ok(None) => StatusCode::ACCEPTED.into_response(),
+        Err(e) => err(e),
+    }
+}
+
+async fn mcp_config(State(app): S) -> Json<Value> {
+    let c = app.mcp.lock().unwrap().clone();
+    Json(json!({"config": c, "exe": std::env::current_exe().ok().map(|p| p.display().to_string()), "data": app.paths.data.display().to_string()}))
+}
+
+#[derive(Deserialize)]
+struct McpIn {
+    enabled: bool,
+    identity: String,
+    consent_only: bool,
+    allow_write: bool,
+    #[serde(default)]
+    new_token: bool,
+}
+
+async fn set_mcp_config(State(app): S, Json(b): Json<McpIn>) -> Response {
+    let mut c = app.mcp.lock().unwrap();
+    c.enabled = b.enabled;
+    c.identity = if b.identity == "full" { "full".into() } else { "pseudonym".into() };
+    c.consent_only = b.consent_only;
+    c.allow_write = b.allow_write;
+    if b.new_token {
+        c.token = crate::mcp::new_token();
+    }
+    match c.save(&app.paths.mcp) {
+        Ok(()) => Json(json!({"config": *c})).into_response(),
+        Err(e) => err(e),
+    }
+}
+
 // ------------------------------------------------------------- WebSocket
 static CLIENT_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -893,6 +1150,10 @@ enum ClientMsg {
     Tap { src: u32 },
     /// Live sonagram subscription; `win` = analysis window in seconds.
     Live { on: bool, #[serde(default)] win: Option<f32> },
+    /// Board on/off (bypass the whole chain).
+    BypassAll { on: bool },
+    /// Sonagram nodes this client shows.
+    Taps { #[serde(default)] ids: Vec<String> },
 }
 
 async fn client(app: Arc<App>, socket: WebSocket) {
@@ -937,6 +1198,10 @@ async fn client(app: Arc<App>, socket: WebSocket) {
             }
             ClientMsg::Mute { on } => app.set_mute(on),
             ClientMsg::Tap { src } => app.set_tap(src),
+            ClientMsg::BypassAll { on } => app.set_bypass_all(on),
+            ClientMsg::Taps { ids } => {
+                app.tap_view.lock().unwrap().insert(me, ids.into_iter().take(16).collect());
+            }
             ClientMsg::Live { on, win } => {
                 if let Some(w) = win.filter(|w| w.is_finite()) {
                     *app.live_window.lock().unwrap() = w.clamp(0.002, 0.05);
@@ -955,6 +1220,7 @@ async fn client(app: Arc<App>, socket: WebSocket) {
     if live_on {
         app.live_subs.fetch_sub(1, Ordering::Relaxed);
     }
+    app.tap_view.lock().unwrap().remove(&me);
     send_task.abort();
 }
 

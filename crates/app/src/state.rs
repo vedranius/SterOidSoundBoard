@@ -22,11 +22,13 @@ pub struct Paths {
     pub clinic: PathBuf,
     pub ai: PathBuf,
     pub clinic_presets: PathBuf,
+    pub mcp: PathBuf,
 }
 
 impl Paths {
-    pub fn new() -> Self {
-        let data = dirs::data_dir().unwrap_or_else(|| PathBuf::from(".")).join("SterOidSoundBoard");
+    /// The data directory: `root` (`--data DIR`) or the platform's app-data folder.
+    pub fn new(root: Option<PathBuf>) -> Self {
+        let data = root.unwrap_or_else(|| dirs::data_dir().unwrap_or_else(|| PathBuf::from(".")).join("SterOidSoundBoard"));
         for d in ["boards", "presets", "recordings", "clinic_presets"] {
             let _ = std::fs::create_dir_all(data.join(d));
         }
@@ -38,6 +40,7 @@ impl Paths {
             clinic: data.join("clinic.json"),
             ai: data.join("ai.json"),
             clinic_presets: data.join("clinic_presets"),
+            mcp: data.join("mcp.json"),
             data,
         }
     }
@@ -79,6 +82,19 @@ pub struct App {
     pub live_window: Mutex<f32>,
     /// AI opinions and model downloads running in the background (and recent ones).
     pub ai_tasks: Mutex<Vec<AiTask>>,
+    /// Display nodes (VU meter, sonagram): read position in their tap and,
+    /// for sonagrams someone is looking at, a live analyzer.
+    taps: Mutex<HashMap<String, TapState>>,
+    /// Sonagram nodes each WebSocket client shows (client id → node ids).
+    pub tap_view: Mutex<HashMap<u64, Vec<String>>>,
+    /// MCP (AI assistants) settings and token.
+    pub mcp: Mutex<crate::mcp::McpConfig>,
+}
+
+struct TapState {
+    pos: usize,
+    analyzer: Option<LiveAnalyzer>,
+    buf: Vec<f32>,
 }
 
 /// A background AI job with its log, streamed text and outcome.
@@ -224,8 +240,9 @@ fn load_json<T: serde::de::DeserializeOwned + Default>(p: &PathBuf) -> T {
 }
 
 impl App {
-    pub fn new() -> Arc<Self> {
-        let paths = Paths::new();
+    pub fn new(root: Option<PathBuf>) -> Arc<Self> {
+        let paths = Paths::new(root);
+        let mcp = crate::mcp::McpConfig::load(&paths.mcp);
         let board: Board = load_json(&paths.board);
         let audio_cfg: AudioConfig = load_json(&paths.audio);
         let live = board.nodes.iter().map(|n| (n.id.clone(), LiveNode::from_desc(n))).collect();
@@ -254,6 +271,9 @@ impl App {
             live_subs: std::sync::atomic::AtomicUsize::new(0),
             live_window: Mutex::new(0.005),
             ai_tasks: Mutex::new(vec![]),
+            taps: Mutex::new(HashMap::new()),
+            tap_view: Mutex::new(HashMap::new()),
+            mcp: Mutex::new(mcp),
         })
     }
 
@@ -469,6 +489,26 @@ impl App {
         self.stats.tap_src.store(src.min(1), Relaxed);
     }
 
+    /// Whole board on/off: off sends the routed input straight to the outputs.
+    pub fn set_bypass_all(&self, on: bool) {
+        self.stats.bypass.store(on, Relaxed);
+        self.emit(json!({"t": "bypass_all", "on": on}));
+    }
+
+    /// New channel matrix: applied to the running streams at once and saved.
+    pub fn set_routing(&self, r: steroid_engine::routing::Routing) -> Result<steroid_engine::routing::Routing> {
+        let r = r.sanitized();
+        let mut inner = self.inner.lock().unwrap();
+        inner.audio_cfg.routing = r.clone();
+        if let Some(e) = &inner.engine {
+            self.stats.routing.apply(&r, e.info.in_channels as usize, e.info.out_channels as usize);
+        }
+        std::fs::write(&self.paths.audio, serde_json::to_string_pretty(&inner.audio_cfg)?)?;
+        drop(inner);
+        self.emit(json!({"t": "routing", "routing": r}));
+        Ok(r)
+    }
+
     // ------------------------------------------------------------ clinic
 
     pub fn save_clinic(&self, c: &Clinic) -> Result<()> {
@@ -477,7 +517,7 @@ impl App {
         Ok(())
     }
 
-    pub fn start_session(&self, patient_id: &str) -> Result<Session> {
+    pub fn start_session(&self, patient_id: &str, kind: &str, protocol: Option<&str>) -> Result<Session> {
         let board = self.inner.lock().unwrap().board.clone();
         let mut c = self.clinic.lock().unwrap();
         if !c.patients.iter().any(|p| p.id == patient_id) {
@@ -488,7 +528,22 @@ impl App {
             s.end = Some(now);
         }
         let preset = self.current_preset.lock().unwrap().clone();
-        let s = Session { id: clinic::new_id("s"), patient_id: patient_id.into(), start: now, end: None, notes: String::new(), board: Some(board), preset };
+        let tasks = protocol
+            .and_then(|p| steroid_clinic::protocol::PROTOCOLS.iter().find(|x| x.id == p))
+            .map(|p| p.tasks.iter().enumerate().map(|(i, t)| clinic::SessionTask { id: format!("t{i}"), task: t.to_string(), ..Default::default() }).collect())
+            .unwrap_or_default();
+        let s = Session {
+            id: clinic::new_id("s"),
+            patient_id: patient_id.into(),
+            start: now,
+            end: None,
+            notes: String::new(),
+            board: Some(board),
+            preset,
+            kind: kind.chars().take(40).collect(),
+            tasks,
+            ..Default::default()
+        };
         c.sessions.push(s.clone());
         self.save_clinic(&c)?;
         Ok(s)
@@ -525,6 +580,7 @@ impl App {
             annotations: vec![],
             syllables: None,
             analyses: vec![],
+            ..Default::default()
         };
         let path = clinic::wav_path(&self.paths.recordings, &meta.id);
         match Recorder::start(cons, &path, meta.sample_rate, src, self.stats.clone()) {
@@ -596,6 +652,7 @@ impl App {
             annotations: vec![],
             syllables: None,
             analyses: vec![],
+            ..Default::default()
         };
         let mut c = self.clinic.lock().unwrap();
         c.recordings.push(meta.clone());
@@ -749,10 +806,126 @@ impl App {
                     "pauses": g(&|x| Some(x.pauses as f32)),
                     "f1": g(&|x| x.formants[0]), "f2": g(&|x| x.formants[1]),
                     "disfluencies": sum.total, "sld": sum.sld, "pct_ss": sum.pct_ss,
+                    "grbas_g": r.rating.as_ref().and_then(|x| x.grbas).map(|g| g[0]),
+                    "capev_overall": r.rating.as_ref().and_then(|x| x.capev).and_then(|c| c[0]),
                 })
             })
             .collect();
         Ok(json!({"settings": st, "rows": rows}))
+    }
+
+    /// Clinical voice profile (MPT, s/z, F0 range, DSI) from a patient's task
+    /// recordings: one session's, or the latest of each task.
+    pub fn voice_profile(&self, patient_id: &str, session: Option<&str>) -> Result<serde_json::Value> {
+        let (recs, st, cal) = {
+            let c = self.clinic.lock().unwrap();
+            if !c.patients.iter().any(|p| p.id == patient_id) {
+                return Err(anyhow!("no such patient"));
+            }
+            let mut v: Vec<Recording> = c
+                .recordings
+                .iter()
+                .filter(|r| r.patient_id.as_deref() == Some(patient_id) && session.is_none_or(|s| r.session_id.as_deref() == Some(s)))
+                .cloned()
+                .collect();
+            v.sort_by_key(|r| std::cmp::Reverse(r.created));
+            if session.is_none() {
+                // newest recording of each task (three of a sustained vowel, for MPT)
+                let mut seen: HashMap<String, usize> = HashMap::new();
+                v.retain(|r| {
+                    let n = seen.entry(r.task.clone()).or_insert(0);
+                    *n += 1;
+                    *n <= if r.task.starts_with("Produženi vokal") { 3 } else { 1 }
+                });
+            }
+            (v, c.settings.analysis.sanitized(), c.settings.calibration_db)
+        };
+        let reps: Vec<(Recording, Arc<VoiceReport>)> = recs.into_iter().filter_map(|r| self.whole_report(&r.id, &st).ok().map(|a| (r, a))).collect();
+        let items: Vec<(&Recording, &VoiceReport)> = reps.iter().map(|(r, a)| (r, a.as_ref())).collect();
+        let p = steroid_clinic::protocol::voice_profile(&items, cal);
+        Ok(json!({"profile": p, "recordings": reps.iter().map(|(r, _)| json!({"id": r.id, "task": r.task, "created": r.created})).collect::<Vec<_>>()}))
+    }
+
+    /// Everything known about a patient, without measurements (fast): profile,
+    /// sessions with documentation, recordings, ratings, questionnaires, notes, AI opinions.
+    pub fn chart(&self, patient_id: &str) -> Result<serde_json::Value> {
+        let c = self.clinic.lock().unwrap();
+        let p = c.patients.iter().find(|p| p.id == patient_id).ok_or_else(|| anyhow!("no such patient"))?;
+        let mut sessions: Vec<serde_json::Value> = c
+            .sessions
+            .iter()
+            .filter(|s| s.patient_id == patient_id)
+            .map(|s| {
+                json!({"id": s.id, "start": s.start, "end": s.end, "kind": s.kind, "preset": s.preset, "notes": s.notes, "soap": s.soap,
+                       "tasks": s.tasks, "homework": s.homework, "next_date": s.next_date,
+                       "recordings": c.recordings.iter().filter(|r| r.session_id.as_deref() == Some(&s.id)).map(|r| r.id.clone()).collect::<Vec<_>>()})
+            })
+            .collect();
+        sessions.sort_by_key(|s| std::cmp::Reverse(s["start"].as_u64().unwrap_or(0)));
+        let mut recs: Vec<&Recording> = c.recordings.iter().filter(|r| r.patient_id.as_deref() == Some(patient_id)).collect();
+        recs.sort_by_key(|r| std::cmp::Reverse(r.created));
+        let recordings: Vec<serde_json::Value> = recs
+            .iter()
+            .map(|r| {
+                json!({"id": r.id, "created": r.created, "task": r.task, "label": r.label, "duration": r.duration, "source": r.source,
+                       "session_id": r.session_id, "notes": r.notes, "rating": r.rating, "annotations": r.annotations.len(),
+                       "saved_analyses": r.analyses.iter().map(|a| json!({"id": a.id, "created": a.created, "start": a.start, "end": a.end, "label": a.label,
+                           "f0_mean": a.report["f0_mean"], "jitter_local": a.report["jitter_local"], "shimmer_local": a.report["shimmer_local"], "hnr_db": a.report["hnr_db"], "cpps": a.report["cpps"]})).collect::<Vec<_>>()})
+            })
+            .collect();
+        let mut q: Vec<&clinic::Questionnaire> = c.questionnaires.iter().filter(|q| q.patient_id == patient_id).collect();
+        q.sort_by_key(|q| q.date);
+        let mut notes: Vec<&clinic::ClinicalNote> = c.notes.iter().filter(|n| n.patient_id == patient_id).collect();
+        notes.sort_by_key(|n| std::cmp::Reverse(n.created));
+        let mut ai: Vec<&AiReport> = c.ai_reports.iter().filter(|a| a.patient_id.as_deref() == Some(patient_id)).collect();
+        ai.sort_by_key(|a| std::cmp::Reverse(a.created));
+        Ok(json!({
+            "patient": p,
+            "age": clinic::age_at(&p.data.birth, clinic::now_ms()),
+            "sessions": sessions,
+            "recordings": recordings,
+            "questionnaires": q,
+            "notes": notes,
+            "ai_reports": ai,
+            "settings": {"calibrated": c.settings.calibration_db.is_some(), "clinic_name": c.settings.clinic_name},
+        }))
+    }
+
+    /// One session with its documentation, settings and recordings.
+    pub fn session_detail(&self, id: &str) -> Result<serde_json::Value> {
+        let c = self.clinic.lock().unwrap();
+        let s = c.sessions.iter().find(|s| s.id == id).ok_or_else(|| anyhow!("no such session"))?;
+        let nodes: Vec<serde_json::Value> = s
+            .board
+            .as_ref()
+            .map(|b| b.nodes.iter().filter(|n| n.role.is_some()).map(|n| json!({"role": n.role, "kind": n.kind, "bypass": n.bypass, "params": n.params})).collect())
+            .unwrap_or_default();
+        let recs: Vec<&Recording> = c.recordings.iter().filter(|r| r.session_id.as_deref() == Some(&s.id)).collect();
+        Ok(json!({"id": s.id, "patient_id": s.patient_id, "start": s.start, "end": s.end, "notes": s.notes,
+                  "preset": s.preset, "has_board": s.board.is_some(), "nodes": nodes, "recordings": recs,
+                  "kind": s.kind, "soap": s.soap, "tasks": s.tasks, "homework": s.homework, "next_date": s.next_date}))
+    }
+
+    pub fn add_note(&self, patient_id: &str, title: &str, text: &str, source: &str) -> Result<clinic::ClinicalNote> {
+        let text = text.trim();
+        if text.is_empty() || text.len() > 200_000 {
+            return Err(anyhow!(tr!("bilješka je prazna ili preduga", "the note is empty or too long")));
+        }
+        let mut c = self.clinic.lock().unwrap();
+        if !c.patients.iter().any(|p| p.id == patient_id) {
+            return Err(anyhow!("no such patient"));
+        }
+        let n = clinic::ClinicalNote {
+            id: clinic::new_id("n"),
+            patient_id: patient_id.into(),
+            created: clinic::now_ms(),
+            title: title.trim().chars().take(300).collect(),
+            text: text.into(),
+            source: source.chars().take(80).collect(),
+        };
+        c.notes.push(n.clone());
+        self.save_clinic(&c)?;
+        Ok(n)
     }
 
     // ------------------------------------------------------------ clinical presets
@@ -1048,6 +1221,46 @@ impl App {
         let rec = inner.recording.as_ref().map(|r| r.rec.seconds());
         let nodes: serde_json::Map<String, serde_json::Value> =
             inner.live.iter().map(|(id, n)| (id.clone(), json!(n.meter.take()))).collect();
+        let (ch_in, ch_out) = match inner.engine.as_ref() {
+            Some(e) => self.stats.routing.take_peaks(e.info.in_channels as usize, e.info.out_channels as usize),
+            None => (vec![], vec![]),
+        };
+        // display nodes: VU (RMS + peak of the period) and sonagrams that are on screen
+        let (vu, taps) = {
+            let view: std::collections::HashSet<String> = self.tap_view.lock().unwrap().values().flatten().cloned().collect();
+            let sr = inner.engine.as_ref().map(|e| e.info.sample_rate as f32).unwrap_or(48000.0);
+            let mut states = self.taps.lock().unwrap();
+            states.retain(|id, _| inner.live.contains_key(id));
+            let (mut vu, mut taps) = (serde_json::Map::new(), serde_json::Map::new());
+            for (id, n) in &inner.live {
+                let Some(ring) = &n.tap else { continue };
+                let st = states.entry(id.clone()).or_insert_with(|| TapState { pos: 0, analyzer: None, buf: vec![] });
+                st.buf.clear();
+                ring.read(&mut st.pos, &mut st.buf);
+                if n.kind == NodeKind::VuMeter {
+                    let (sum, pk) = st.buf.iter().fold((0f64, 0f32), |(s, p), v| (s + (*v as f64).powi(2), p.max(v.abs())));
+                    let rms = if st.buf.is_empty() { 0.0 } else { (sum / st.buf.len() as f64).sqrt() as f32 };
+                    vu.insert(id.clone(), json!([rms, pk]));
+                } else if view.contains(id) {
+                    let a = st.analyzer.get_or_insert_with(|| LiveAnalyzer::new(sr));
+                    if (a.sample_rate() - sr).abs() > 0.5 {
+                        *a = LiveAnalyzer::new(sr);
+                    }
+                    a.push(&st.buf);
+                    let (df, nb) = a.bins();
+                    let frames: Vec<serde_json::Value> = a
+                        .frames()
+                        .into_iter()
+                        .map(|f| json!({"s": base64::engine::general_purpose::STANDARD.encode(&f.spec), "f0": (f.f0 * 10.0).round() / 10.0, "db": (f.db * 10.0).round() / 10.0,
+                                     "lo": (f.lo * 1000.0).round() / 1000.0, "hi": (f.hi * 1000.0).round() / 1000.0}))
+                        .collect();
+                    taps.insert(id.clone(), json!({"df": df, "n": nb, "hop": a.hop_seconds(), "win": a.window(), "db_min": SPEC_DB_MIN, "db_step": SPEC_DB_STEP, "frames": frames}));
+                } else {
+                    st.analyzer = None;
+                }
+            }
+            (vu, taps)
+        };
         let s = &self.stats;
         json!({
             "live": live,
@@ -1061,6 +1274,11 @@ impl App {
             "xruns": s.xruns.load(Relaxed),
             "frames": s.callback_frames.load(Relaxed),
             "nodes": nodes,
+            "ch_in": ch_in,
+            "ch_out": ch_out,
+            "bypass_all": s.bypass.load(Relaxed),
+            "vu": vu,
+            "taps": taps,
         })
         .to_string()
     }

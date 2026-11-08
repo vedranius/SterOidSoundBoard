@@ -14,7 +14,9 @@ const EQ_QUICK = {
   "Bas": FREQS.map((f) => (f <= 125 ? 8 : f <= 250 ? 4 : 0)),
   "Visoki": FREQS.map((f) => (f >= 8000 ? 8 : f >= 4000 ? 4 : 0)),
 };
-const TASKS = ["Produženi vokal /a/", "Produženi vokal /i/", "Produženi vokal /u/", "Čitanje standardnog teksta", "Spontani govor", "Brojanje / automatizirani govor", "Ponavljanje rečenica", "Glasovni raspon / glisando", "Pjevanje", "Kalibracija", "Ostalo"];
+// Same list as crates/clinic/src/protocol.rs TASKS (stored names, translated in the UI).
+const TASKS = ["Produženi vokal /a/", "Produženi vokal /i/", "Produženi vokal /u/", "Produženi /s/", "Produženi /z/", "Najtiša fonacija /a/", "Najglasnija fonacija /a/",
+  "Glasovni raspon / glisando", "Čitanje standardnog teksta", "Spontani govor", "Opis slike", "Brojanje / automatizirani govor", "Ponavljanje rečenica", "Dijadohokineza (pa-ta-ka)", "Pjevanje", "Kalibracija", "Ostalo"];
 function fillTasks(sel, cur) {
   sel.innerHTML = ""; sel.add(new Option("— zadatak —", ""));
   TASKS.forEach((t) => sel.add(new Option(t, t)));
@@ -188,6 +190,7 @@ function renderSession() {
   clearInterval(timerH); $("#clTimer").textContent = "";
   if (mine) { const tick = () => ($("#clTimer").textContent = fmtDur((Date.now() - a.start) / 1000)); tick(); timerH = setInterval(tick, 1000); }
   $("#clSessCount").textContent = `${st.sessions.length} ${st.sessions.length === 1 ? "sesija" : "sesija"}`;
+  if (window.Practice) Practice.session();
   const list = $("#clSessions"); list.innerHTML = "";
   if (!st.patient) list.innerHTML = '<div class="dim small">Odaberite klijenta.</div>';
   else if (!st.sessions.length) list.innerHTML = '<div class="dim small">Nema sesija. Započnite sesiju — bilježe se postavke, snimke i analize.</div>';
@@ -215,7 +218,7 @@ $("#clSessBtn").onclick = async () => {
   const a = st.active, mine = a && a.patient_id === st.patient.id;
   try {
     if (mine) await api("POST", `/api/sessions/${a.id}/stop`, { notes: $("#clSessNotes").value });
-    else await api("POST", "/api/sessions", { patient_id: st.patient.id });
+    else await api("POST", "/api/sessions", { patient_id: st.patient.id, ...(window.Practice ? Practice.startOpts() : {}) });
     await loadPatients();
   } catch (e) { toast(e.message); }
 };
@@ -297,14 +300,16 @@ function renderRecTable() {
 
 // ============================================================ tabs, mute
 const PAGES = {
-  rehab: ["sliders", "Real-time audio", "Slušna povratna veza: EQ, DAF, FAF, šum, diskontinuitet"],
-  analiza: ["activity", "Analiza glasa", "Spektrogram, visina, formanti i akustička analiza (Praat)"],
+  karton: ["user", "Karton pacijenta", "Anamneza, glasovni profil, sesije, upitnici, bilješke i AI mišljenja"],
+  rehab: ["sliders", "DigiLingua FILTER", "Slušna povratna veza u stvarnom vremenu: zvučna kartica, kanali, EQ, DAF, FAF, šum, filtri i monitori"],
+  analiza: ["activity", "Analiza", "Snimanje, spektrogram, visina, formanti, akustička analiza (Praat) i perceptivna ocjena"],
   napredak: ["trending", "Napredak", "Mjere kroz vrijeme i usporedba snimaka"],
 };
 function setTab(t) {
   st.tab = t;
   document.querySelectorAll("#clTabs button").forEach((b) => b.classList.toggle("sel", b.dataset.tab === t));
   $("#clRehab").classList.toggle("hidden", t !== "rehab");
+  $("#clKarton").classList.toggle("hidden", t !== "karton");
   $("#clAnaliza").classList.toggle("hidden", t !== "analiza");
   $("#clNapredak").classList.toggle("hidden", t !== "napredak");
   const [icon, title, sub] = PAGES[t];
@@ -317,6 +322,7 @@ function setTab(t) {
   if (sono) requestAnimationFrame(() => sono.resize());
   lsSet("ssb.cltab", t);
   if (t === "napredak") loadProgress();
+  if (t === "karton" && window.Practice) Practice.karton();
   liveSub(); applyTabMute();
 }
 // collapsible side panels (drawers on small screens)
@@ -364,7 +370,8 @@ function fillDevs() {
   fill($("#clOut"), h.outputs, AUD.cfg.output, h.default_output);
 }
 const audioCfg = () => ({ host: $("#clHost").value || null, input: $("#clIn").value || null, output: $("#clOut").value || null,
-  buffer: $("#clBuf").value ? +$("#clBuf").value : null, no_input: $("#clNoIn").checked });
+  buffer: $("#clBuf").value ? +$("#clBuf").value : null, no_input: $("#clNoIn").checked,
+  all_channels: !!(AUD.cfg && AUD.cfg.all_channels), routing: (AUD.cfg && AUD.cfg.routing) || {} });
 async function startAudio() {
   if (st.recording && !confirm("Ponovno pokretanje zvuka zaustavlja snimanje. Nastaviti?")) return;
   $("#clAudioBtn").disabled = true;
@@ -876,6 +883,7 @@ async function openAnalysis(r) {
   fillTasks($("#anTask"), r.task); $("#anNotes").value = r.notes || ""; $("#anSyl").value = r.syllables || "";
   $("#anAiOut").innerHTML = ""; $("#anAiPrompt").classList.add("hidden"); $("#anAiQ").value = "";
   aiStatus(); loadAiHistory(); loadSummary(); aiRestore(r); renderSaved(); renderRecTable();
+  if (window.Practice) Practice.rating();
   an.editor = new Editor.SoundEditor($("#anEditor"), {
     rec: r, analysis: an.settings,
     onAnalyze: (sel, settings) => { an.settings = settings; runAnalysis(sel); },
@@ -1150,6 +1158,7 @@ const PR_METRICS = [
   ["hnr_db", "HNR", "dB", 1, 20, "ge"], ["cpps", "CPPS", "dB", 1, null, "ge"], ["max_voiced_s", "Najduža fonacija (MPT)", "s", 1, null, "ge"],
   ["f0_range_st", "Raspon F0", "st", 1], ["intensity_mean_db", "Intenzitet", "dB", 1], ["speech_rate", "Brzina govora", "slog/s", 2],
   ["articulation_rate", "Brzina artikulacije", "slog/s", 2], ["pct_ss", "% mucanih slogova (%SS)", "%", 1, null, "le"], ["sld", "SLD (broj)", "", 0, null, "le"],
+  ["grbas_g", "GRBAS — G (perceptivno)", "", 0, null, "le"], ["capev_overall", "CAPE-V ukupna težina", "", 0, null, "le"],
 ];
 const pr = { rows: [], loading: false };
 async function loadProgress() {
@@ -1220,7 +1229,7 @@ function drawChart(cv, pts, norm, dir, dec) {
 }
 $("#prCsv").onclick = () => {
   const rows = prRows(); if (!rows.length) return;
-  const keys = ["created", "task", "label", "duration", "f0_mean", "f0_sd", "f0_range_st", "jitter_local", "shimmer_local", "hnr_db", "cpps", "intensity_mean_db", "max_voiced_s", "speech_rate", "articulation_rate", "pauses", "f1", "f2", "disfluencies", "sld", "pct_ss"];
+  const keys = ["created", "task", "label", "duration", "f0_mean", "f0_sd", "f0_range_st", "jitter_local", "shimmer_local", "hnr_db", "cpps", "intensity_mean_db", "max_voiced_s", "speech_rate", "articulation_rate", "pauses", "f1", "f2", "disfluencies", "sld", "pct_ss", "grbas_g", "capev_overall"];
   const cell = (r, k) => { if (k === "created") return new Date(r.created).toISOString().replace("T", " ").slice(0, 16); const v = k === "intensity_mean_db" ? prValue(r, k) : r[k]; if (v == null) return ""; if (typeof v === "number") return I18N.dec(String(+v.toFixed(4))); return '"' + String(v).replace(/"/g, '""') + '"'; };
   const csv = "﻿" + keys.join(";") + "\n" + rows.map((r) => keys.map((k) => cell(r, k)).join(";")).join("\n");
   const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
@@ -1475,6 +1484,40 @@ async function loadAiHistory() {
 // ---- AI settings panel (header "AI" button)
 const AI_DEFAULT_MODEL = { anthropic: "claude-opus-5", openai: "", ollama: "gemma3:4b" };
 const AI_URL_HINT = { anthropic: "https://api.anthropic.com", openai: "https://api.openai.com/v1", ollama: "http://127.0.0.1:11434" };
+// Ready-made settings for OpenAI-compatible services: local (free, data stay
+// on the computer) and online services with free models.
+const AI_PRESETS = [
+  ["", "— ručno —", "", ""],
+  ["lmstudio", "LM Studio (lokalno, besplatno)", "http://127.0.0.1:1234/v1", ""],
+  ["jan", "Jan (lokalno, besplatno)", "http://127.0.0.1:1337/v1", ""],
+  ["llamacpp", "llama.cpp server (lokalno, besplatno)", "http://127.0.0.1:8080/v1", ""],
+  ["localai", "LocalAI / vLLM (lokalno)", "http://127.0.0.1:8000/v1", ""],
+  ["ollama-oa", "Ollama preko OpenAI sučelja (lokalno)", "http://127.0.0.1:11434/v1", "gemma3:4b"],
+  ["openrouter", "OpenRouter (besplatni modeli „:free”, treba besplatni ključ)", "https://openrouter.ai/api/v1", "meta-llama/llama-3.3-70b-instruct:free"],
+  ["opencode", "OpenCode Zen (ključ s opencode.ai)", "https://opencode.ai/zen/v1", ""],
+  ["groq", "Groq (besplatna razina, ključ)", "https://api.groq.com/openai/v1", "llama-3.3-70b-versatile"],
+  ["gemini", "Google Gemini (besplatna razina, ključ)", "https://generativelanguage.googleapis.com/v1beta/openai", "gemini-2.5-flash"],
+  ["mistral", "Mistral (ključ)", "https://api.mistral.ai/v1", "mistral-small-latest"],
+  ["openai", "OpenAI (ključ, plaćeno)", "https://api.openai.com/v1", "gpt-5-mini"],
+];
+$("#aiPreset").innerHTML = AI_PRESETS.map(([id, name]) => `<option value="${id}">${name}</option>`).join("");
+$("#aiPreset").onchange = () => {
+  const p = AI_PRESETS.find((x) => x[0] === $("#aiPreset").value);
+  if (!p || !p[0]) return;
+  $("#aiUrl").value = p[2]; if (p[3]) $("#aiModel").value = p[3];
+  $("#aiInfo").innerHTML = /127\.0\.0\.1|localhost/.test(p[2]) ? "Lokalni servis: pokrenite ga na ovom računalu (u pregledniku mora dopuštati CORS). Podaci ne izlaze s računala. Spremite, pa „⟳ Modeli”."
+    : "Servis na internetu: pseudonimizirani podaci idu tom servisu. Upišite ključ, spremite, pa „⟳ Modeli” za popis (besplatni modeli su na vrhu).";
+};
+$("#aiModels").onclick = async () => {
+  const b = $("#aiModels"); b.disabled = true;
+  try {
+    if (!(await saveAi())) return;
+    const list = await api("GET", "/api/ai/models");
+    $("#aiModelList").innerHTML = list.map((m) => `<option value="${esc(m)}">`).join("");
+    toastInfo(`Modela: ${list.length}${list.some((m) => m.endsWith(":free")) ? " (besplatni na vrhu)" : ""}`);
+    $("#aiModel").focus();
+  } catch (e) { toast(e.message); } finally { b.disabled = false; }
+};
 async function openAiPanel() {
   $("#aiPanel").classList.remove("hidden");
   await loadAiCfg(); if (!AI) return;
@@ -1488,10 +1531,13 @@ function aiPanelHints() {
   $("#aiKey").placeholder = same && AI.has_key ? "•••• spremljen (upišite za promjenu)" : pr === "openai" ? "sk-… (prazno za lokalne servere)" : "sk-ant-…";
   $("#aiKeyL").classList.toggle("hidden", pr === "ollama"); $("#aiClearKey").classList.toggle("hidden", pr === "ollama");
   $("#aiOllama").classList.toggle("hidden", pr !== "ollama");
+  $("#aiPresetL").classList.toggle("hidden", pr !== "openai");
+  const pre = AI_PRESETS.find((x) => x[0] && x[2] === $("#aiUrl").value.trim());
+  $("#aiPreset").value = pre ? pre[0] : "";
   $("#aiInfo").innerHTML = pr === "anthropic"
     ? 'Zadani model: <b>claude-opus-5</b>. Ključ: console.anthropic.com → API Keys. Ključ se sprema samo na ovom računalu (ai.json) i nikad se ne prikazuje u pregledniku.'
     : pr === "ollama" ? "Odaberite instalirani model ili preuzmite preporučeni. Za sliku sonagrama treba model s vidom (👁)."
-    : "Bilo koji servis s OpenAI /chat/completions sučeljem (OpenAI, Azure proxy, LM Studio, vLLM, OpenRouter…). Upišite model i adresu.";
+    : "Bilo koji servis s OpenAI /chat/completions sučeljem — odaberite gotove postavke: lokalni (LM Studio, Jan, llama.cpp — besplatno, podaci ostaju na računalu) ili OpenRouter / OpenCode Zen / Groq / Gemini s besplatnim modelima.";
   if (pr === "ollama") olLoad();
   else api("GET", "/api/ai/ollama?url=" + encodeURIComponent(AI_URL_HINT.ollama)).then((o) => {
     if (o && o.running && $("#aiProvider").value === pr) $("#aiInfo").innerHTML += ` <span class="okc">· Na ovom računalu radi Ollama ${esc(o.version)} (${o.models.length} ${o.models.length === 1 ? "model" : "modela"}) — odaberite „Ollama” za besplatnu lokalnu analizu.</span>`;
@@ -1641,7 +1687,7 @@ buildModules(); buildEqSliders(); setEqView(lsGet("ssb.eqview", "sliders"));
 HOOKS.push((m) => {
   switch (m.t) {
     case "hello": if (st.visible) { liveSub(); send({ t: "tap", src: +$("#clTap").value }); } break;
-    case "board": syncAll(); break;
+    case "board": syncAll(); if (window.Practice) Practice.board(); break;
     case "param": case "bypass":
       if (st.currentPreset && !st.presetDirty) { st.presetDirty = true; renderPresetBadge(); }
       if (m.t === "bypass" || m.src !== ME) syncAll(); else renderChainSoon();
@@ -1650,7 +1696,9 @@ HOOKS.push((m) => {
     case "clinic_presets": loadPresets(); break;
     case "clinic": if (st.visible) reloadSoon(); break;
     case "rec": showRec(m.on, 0); break;
-    case "audio": AUD.running = m.running; AUD.error = m.error || null; showAudio(); break;
+    case "audio": AUD.running = m.running; AUD.error = m.error || null; showAudio(); if (window.Practice) Practice.audio(); break;
+    case "routing": AUD.cfg.routing = m.routing; if (window.Practice) Practice.audio(); break;
+    case "bypass_all": if (window.Practice) Practice.bypassAll(m.on); break;
     case "theme":
       if (an.editor) an.editor.redraw();
       if (sono) sono.full();
@@ -1670,10 +1718,17 @@ HOOKS.push((m) => {
       if (!st.visible) break;
       vu(m); showStats(m);
       if (m.live && sono) sono.push(m.live);
+      if (window.Practice) Practice.meters(m);
       if (m.rec != null) showRec(true, m.rec); else if (st.recording) showRec(false);
       break;
   }
 });
-setTab(["rehab", "analiza", "napredak"].includes(lsGet("ssb.cltab", "")) ? lsGet("ssb.cltab", "rehab") : "rehab");
+// Interface for practice.js (patient chart, session workflow, FILTER extras, ratings, MCP).
+window.Clinic = {
+  st, an, AUD, TASKS, node, spec, pval, setP, clamp, esc, num, fmtTime, fmtDate, fmtDur, yrs, ageOf, calibrated, recTitle,
+  setTab, openAnalysis, loadPatientData, loadPatients, loadDevices, startAudio, audioCfg, fillTasks, toastInfo, syncAll, renderChainSoon,
+  loadSettings, openSession,
+};
+setTab(["karton", "rehab", "analiza", "napredak"].includes(lsGet("ssb.cltab", "")) ? lsGet("ssb.cltab", "rehab") : "rehab");
 api("GET", "/api/status").then((s) => { showRec(!!s.recording, 0); st.currentPreset = s.preset || null; renderPresetBadge(); }).catch(() => {});
 })();

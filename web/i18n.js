@@ -313,6 +313,30 @@ const I18N = (() => {
     ["Postavke analize", "Analysis settings"], ["Kalibracija", "Calibration"], ["nije kalibrirano (intenzitet relativan)", "not calibrated (relative intensity)"], ["Opažanja rehabilitatora", "Clinician's observations"],
     ["Oscilogram, spektrogram i konture", "Oscillogram, spectrogram and contours"], ["Mjere", "Measures"], ["Netečnosti", "Disfluencies"], ["Ukupno oznaka", "Total labels"], ["Slogova", "Syllables"],
     ["Prosjek 3 najduža SLD", "Mean of the 3 longest SLD"], ["Po vrstama", "By kind"], ["Klinički nalaz (automatski)", "Clinical report (automatic)"], ["AI mišljenje — pomoć rehabilitatoru, nije dijagnoza", "AI opinion — an aid for the clinician, not a diagnosis"],
+    ["pacijent", "patient"], ["Karton", "Chart"], ["Karton pacijenta", "Patient chart"],
+    ["Anamneza, glasovni profil, sesije, upitnici, bilješke i AI mišljenja", "History, voice profile, sessions, questionnaires, notes and AI opinions"],
+    ["Slušna povratna veza u stvarnom vremenu: zvučna kartica, kanali, EQ, DAF, FAF, šum, filtri i monitori", "Real-time auditory feedback: sound card, channels, EQ, DAF, FAF, noise, filters and monitors"],
+    ["Snimanje, spektrogram, visina, formanti, akustička analiza (Praat) i perceptivna ocjena", "Recording, spectrogram, pitch, formants, acoustic analysis (Praat) and perceptual rating"],
+    ["Analiza", "Analysis"], ["Perceptivna ocjena", "Perceptual rating"], ["DigiLingua FILTER", "DigiLingua FILTER"],
+    ["Produženi /s/", "Sustained /s/"], ["Produženi /z/", "Sustained /z/"], ["Najtiša fonacija /a/", "Softest phonation /a/"], ["Najglasnija fonacija /a/", "Loudest phonation /a/"],
+    ["Opis slike", "Picture description"], ["Dijadohokineza (pa-ta-ka)", "Diadochokinesis (pa-ta-ka)"],
+    ["↑ glasnije", "↑ louder"], ["↓ tiše", "↓ softer"], ["✓ u cilju", "✓ on target"], ["Ž", "F"], ["drugo", "other"],
+    ["Procjena glasa (akustička i aerodinamička)", "Voice assessment (acoustic and aerodynamic)"], ["Kontrola glasa (kratka)", "Voice follow-up (short)"],
+    ["Procjena tečnosti govora", "Fluency assessment"], ["Terapija tečnosti uz DigiLingua FILTER", "Fluency therapy with the DigiLingua FILTER"], ["Motorika govora / dizartrija", "Motor speech / dysarthria"],
+    ["Produženi vokal /a/ tri puta, /s/ i /z/ (omjer s/z), glisando (F0 raspon), najtiša fonacija (za DSI), čitanje i spontani govor. Uz perceptivnu ocjenu GRBAS/CAPE-V i VHI-10.", "Sustained vowel /a/ three times, /s/ and /z/ (s/z ratio), glissando (F0 range), softest phonation (for the DSI), reading and spontaneous speech. With the GRBAS/CAPE-V perceptual rating and the VHI-10."],
+    ["Produženi vokal /a/, čitanje standardnog teksta i spontani govor za usporedbu s prethodnim mjerenjima.", "Sustained vowel /a/, a standard reading passage and spontaneous speech to compare with earlier measurements."],
+    ["Čitanje, spontani govor, opis slike, automatizirani govor i ponavljanje rečenica; netečnosti se označe u editoru (%SS, trajanje).", "Reading, spontaneous speech, picture description, automatic speech and sentence repetition; disfluencies are labelled in the editor (%SS, duration)."],
+    ["Spontani govor bez filtra, zatim čitanje i govor s DAF/FAF filtrom — usporedba tečnosti sa i bez slušne povratne veze.", "Spontaneous speech without the filter, then reading and speech with the DAF/FAF filter — fluency with and without auditory feedback."],
+    ["Produženi vokali, dijadohokineza (pa-ta-ka), glisando, čitanje i spontani govor.", "Sustained vowels, diadochokinesis (pa-ta-ka), glissando, reading and spontaneous speech."],
+    ["GRBAS — G (perceptivno)", "GRBAS — G (perceptual)"], ["CAPE-V ukupna težina", "CAPE-V overall severity"], ["— ručno —", "— manual —"], ["⟳ Modeli", "⟳ Models"], ["Dohvati popis modela sa servisa", "Fetch the model list from the service"],
+    ["OpenAI-kompatibilan (LM Studio, OpenRouter, OpenCode, Groq…)", "OpenAI-compatible (LM Studio, OpenRouter, OpenCode, Groq…)"],
+    ["LM Studio (lokalno, besplatno)", "LM Studio (local, free)"], ["Jan (lokalno, besplatno)", "Jan (local, free)"], ["llama.cpp server (lokalno, besplatno)", "llama.cpp server (local, free)"],
+    ["LocalAI / vLLM (lokalno)", "LocalAI / vLLM (local)"], ["Ollama preko OpenAI sučelja (lokalno)", "Ollama via the OpenAI interface (local)"],
+    ["OpenRouter (besplatni modeli „:free”, treba besplatni ključ)", "OpenRouter (free “:free” models, needs a free key)"], ["OpenCode Zen (ključ s opencode.ai)", "OpenCode Zen (key from opencode.ai)"],
+    ["Groq (besplatna razina, ključ)", "Groq (free tier, key)"], ["Google Gemini (besplatna razina, ključ)", "Google Gemini (free tier, key)"], ["Mistral (ključ)", "Mistral (key)"], ["OpenAI (ključ, plaćeno)", "OpenAI (key, paid)"],
+    ["Lokalni servis: pokrenite ga na ovom računalu (u pregledniku mora dopuštati CORS). Podaci ne izlaze s računala. Spremite, pa „⟳ Modeli”.", "Local service: run it on this computer (from the browser it must allow CORS). Data does not leave the computer. Save, then “⟳ Models”."],
+    ["Servis na internetu: pseudonimizirani podaci idu tom servisu. Upišite ključ, spremite, pa „⟳ Modeli” za popis (besplatni modeli su na vrhu).", "Online service: pseudonymised data goes to that service. Enter the key, save, then “⟳ Models” for the list (free models first)."],
+    ["Bilo koji servis s OpenAI /chat/completions sučeljem — odaberite gotove postavke: lokalni (LM Studio, Jan, llama.cpp — besplatno, podaci ostaju na računalu) ili OpenRouter / OpenCode Zen / Groq / Gemini s besplatnim modelima.", "Any service with an OpenAI /chat/completions interface — pick a preset: local (LM Studio, Jan, llama.cpp — free, data stays on the computer) or OpenRouter / OpenCode Zen / Groq / Gemini with free models."],
     ["pacijent", "patient"], ["· intenzitet", "· intensity"], ["previše spremljenih analiza za ovu snimku", "too many saved analyses for this recording"], ["nema te analize", "no such analysis"],
     ["naziv preseta je obavezan (do 120 znakova)", "a preset name is required (up to 120 characters)"], ["tvornički preseti se ne mogu brisati", "factory presets cannot be deleted"],
     ["pacijent nema zabilježenu suglasnost za AI analizu (Uredi pacijenta)", "the patient has no recorded consent for AI analysis (Edit patient)"], ["snimka je u međuvremenu obrisana", "the recording has been deleted in the meantime"],
@@ -326,14 +350,19 @@ const I18N = (() => {
     [/^odsječak (.+) s · visina (.+) Hz( · CPPS se računa…)?$/, (m, a, b, c) => `selection ${a} s · pitch ${b} Hz` + (c ? " · computing CPPS…" : "")],
     [/^Algoritmi su port Praata .* prostoriji\.( \* .*)?$/, (m, a) => "The algorithms are a port of Praat (Boersma & Weenink), verified against Praat 7.0. The limits are indicative (MDVP/literature) and depend on the task, microphone and room." + (a || "")],
     [/^SterOidSoundBoard (.*) · DigiLingua\. Mjere su izračunate Praat-kompatibilnim algoritmima\. Nalaz je pomoćno sredstvo i ne zamjenjuje kliničku procjenu\.$/, "SterOidSoundBoard $1 · DigiLingua. The measures are computed with Praat-compatible algorithms. The report is an aid and does not replace clinical assessment."],
-    [/^Nalaz — (.+)$/, "Report — $1"], [/^(\d+) okv\. \((.+) ms\)$/, "$1 frames ($2 ms)"], [/^([\d.,—-]+) slog\/s$/, "$1 syll/s"], [/^zadano \((.+)\)$/, (m, a) => `default (${a === "nema" ? "none" : a})`], [/^(.+) \((\d+) god\.\)$/, "$1 ($2 y)"],
+    [/^Nalaz — (.+)$/, "Report — $1"], [/^vrh (.+)$/, "peak $1"], [/^Modela: (\d+)( \(besplatni na vrhu\))?$/, (m, n, f) => `Models: ${n}` + (f ? " (free ones first)" : "")], [/^(\d+) okv\. \((.+) ms\)$/, "$1 frames ($2 ms)"], [/^([\d.,—-]+) slog\/s$/, "$1 syll/s"], [/^zadano \((.+)\)$/, (m, a) => `default (${a === "nema" ? "none" : a})`], [/^(.+) \((\d+) god\.\)$/, "$1 ($2 y)"],
   );
   const H2E = new Map(), E2H = new Map();
   for (const [h, e] of PAIRS) { if (!H2E.has(h)) H2E.set(h, e); if (!E2H.has(e)) E2H.set(e, h); }
   // the Music panel's own English words
   [["Music", "Glazba"], ["Audio", "Zvuk"], ["Presets", "Preseti"], ["Mute", "Utišaj"], ["Muted", "Utišano"], ["Driver", "Upravljački program"], ["Input", "Ulaz"], ["Output", "Izlaz"], ["Buffer", "Međuspremnik"],
     ["Start", "Pokreni"], ["Stop", "Zaustavi"], ["Load", "Učitaj"], ["Delete", "Obriši"], ["Delay", "Kašnjenje"], ["Time", "Vrijeme"], ["Pitch", "Visina"], ["Left", "Lijevo"], ["Right", "Desno"],
-    ["Mode", "Način"], ["Color", "Boja"], ["Gain", "Pojačanje"], ["Drive", "Distorzija"]].forEach(([e, h]) => E2H.set(e, h));
+    ["Mode", "Način"], ["Color", "Boja"], ["Gain", "Pojačanje"], ["Drive", "Distorzija"],
+    ["Compressor", "Kompresor"], ["Noise Gate", "Vrata šuma"], ["Limiter (hearing protection)", "Limiter (zaštita sluha)"], ["Chorus / Choral Speech", "Zbor / zborni govor"],
+    ["Metronome / Pacer", "Metronom / ritam"], ["Notch / Hum Filter", "Notch / filtar brujanja"], ["VU Meter", "VU metar"], ["Sonagram", "Sonagram"], ["Dynamics", "Dinamika"], ["Monitor", "Monitor"],
+    ["Threshold", "Prag"], ["Ratio", "Omjer"], ["Attack", "Napad"], ["Release", "Otpuštanje"], ["Make-up", "Nadoknada"], ["Hold", "Zadržavanje"], ["Range", "Raspon"], ["Ceiling", "Strop"],
+    ["Voices", "Glasovi"], ["Tempo", "Tempo"], ["Accent every", "Naglasak svakih"], ["Click length", "Trajanje klika"], ["Harmonics", "Harmonici"], ["Target", "Cilj"], ["Tolerance", "Tolerancija"],
+    ["Notch / brujanje", "Notch / brujanje"]].forEach(([e, h]) => E2H.set(e, h));
   const byPattern = (s, list) => { for (const [re, rep] of list) if (re.test(s)) return s.replace(re, rep); return null; };
 
   /** Translate one text into the current language (unknown texts are kept). */
@@ -344,8 +373,19 @@ const I18N = (() => {
     let out;
     if (lang === "en") out = H2E.get(k) ?? byPattern(k, PATTERNS);
     else out = E2H.get(k) ?? byPattern(k, EN_PATTERNS);
+    if (out == null) out = composite(k);
     if (out == null) return str;
     return str.replace(k, out);
+  }
+  /** Texts built from known pieces: "a · b · c" and "name (n)". */
+  function composite(k) {
+    if (k.includes(" · ")) {
+      const parts = k.split(" · "), tp = parts.map((x) => t(x));
+      return tp.some((x, i) => x !== parts[i]) ? tp.join(" · ") : null;
+    }
+    const m = /^(.+) \((\d+)\)$/.exec(k);
+    if (m) { const inner = t(m[1]); return inner !== m[1] ? `${inner} (${m[2]})` : null; }
+    return null;
   }
   /** Template with {0}, {1}… placeholders, translated first. */
   function tf(tpl, ...a) { return t(tpl).replace(/\{(\d+)\}/g, (_, i) => a[+i]); }

@@ -469,6 +469,34 @@ pub fn ask_report(cfg: &AiConfig, system: &str, user: &str, image: Option<&(Stri
     ask(cfg, system, user, image, MAX_TOKENS, p)
 }
 
+/// Model ids the configured service offers (`GET /models`), sorted; free
+/// models of OpenRouter (":free") first.
+pub fn list_models(cfg: &AiConfig) -> Result<Vec<String>> {
+    let base = cfg.base();
+    let (url, headers): (String, Vec<(&str, String)>) = match cfg.provider.as_str() {
+        "ollama" => (format!("{base}/api/tags"), vec![]),
+        "anthropic" => (
+            if base.ends_with("/v1") { format!("{base}/models?limit=100") } else { format!("{base}/v1/models?limit=100") },
+            vec![("x-api-key", cfg.api_key.trim().to_string()), ("anthropic-version", ANTHROPIC_VERSION.to_string())],
+        ),
+        _ => (format!("{base}/models"), if cfg.api_key.trim().is_empty() { vec![] } else { vec![("authorization", format!("Bearer {}", cfg.api_key.trim()))] }),
+    };
+    let mut req = agent_with(&url, Duration::from_secs(20)).get(&url);
+    for (k, v) in &headers {
+        req = req.set(k, v);
+    }
+    let v: Value = match req.call() {
+        Ok(r) => r.into_json()?,
+        Err(ureq::Error::Status(code, r)) => bail!(error_message(code, &r.into_string().unwrap_or_default())),
+        Err(e) => bail!(tr!("nije moguće spojiti se na {url}: {e}", "cannot connect to {url}: {e}")),
+    };
+    let list = v["data"].as_array().or_else(|| v["models"].as_array()).cloned().unwrap_or_default();
+    let mut ids: Vec<String> = list.iter().filter_map(|m| m["id"].as_str().or_else(|| m["name"].as_str()).map(String::from)).collect();
+    ids.sort_by_key(|m| (!m.ends_with(":free"), m.to_lowercase()));
+    ids.dedup();
+    Ok(ids)
+}
+
 /// Small round-trip to verify provider, model and key.
 pub fn test(cfg: &AiConfig) -> Result<Answer> {
     if crate::i18n::en() {
@@ -515,6 +543,7 @@ mod tests {
             annotations: vec![],
             syllables: None,
             analyses: vec![],
+            rating: None,
         }
     }
 

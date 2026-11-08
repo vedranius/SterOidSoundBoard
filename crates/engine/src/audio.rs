@@ -3,6 +3,7 @@
 //! queue and old schedules are sent back to be freed off the audio thread.
 use crate::graph::Schedule;
 use crate::nodes::{new_buf, AtomicF32, Buf, MAX_BLOCK};
+use crate::routing::{LiveRouting, Routing, MAX_CH};
 use anyhow::{anyhow, Context, Result};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, Sample, SampleFormat, SizedSample, StreamConfig};
@@ -22,6 +23,12 @@ pub struct AudioConfig {
     /// Disable input (output-only use).
     #[serde(default)]
     pub no_input: bool,
+    /// Open every channel of the devices (multi-channel interfaces) instead of stereo.
+    #[serde(default)]
+    pub all_channels: bool,
+    /// Input/output channel matrix.
+    #[serde(default)]
+    pub routing: Routing,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -29,6 +36,9 @@ pub struct HostDevices {
     pub host: String,
     pub inputs: Vec<String>,
     pub outputs: Vec<String>,
+    /// Most channels each device offers (same order as `inputs` / `outputs`).
+    pub input_channels: Vec<u16>,
+    pub output_channels: Vec<u16>,
     pub default_input: Option<String>,
     pub default_output: Option<String>,
 }
@@ -62,6 +72,10 @@ pub struct EngineStats {
     pub rec_src: AtomicU32,
     /// Stereo frames the recorder could not keep up with.
     pub rec_dropped: AtomicU32,
+    /// Board bypassed: the output gets the (routed) input unprocessed.
+    pub bypass: AtomicBool,
+    /// Channel matrix as the audio callbacks read it, with per-channel peaks.
+    pub routing: LiveRouting,
 }
 
 /// Seconds of stereo audio the recorder ring can buffer.
@@ -71,13 +85,24 @@ pub fn list_devices() -> Vec<HostDevices> {
     cpal::available_hosts()
         .into_iter()
         .filter_map(|id| cpal::host_from_id(id).ok())
-        .map(|h| HostDevices {
+        .map(|h| {
+            let ins: Vec<(String, u16)> = h
+                .input_devices()
+                .map(|d| d.filter_map(|x| Some((x.name().ok()?, x.supported_input_configs().ok()?.map(|c| c.channels()).max().unwrap_or(2)))).collect())
+                .unwrap_or_default();
+            let outs: Vec<(String, u16)> = h
+                .output_devices()
+                .map(|d| d.filter_map(|x| Some((x.name().ok()?, x.supported_output_configs().ok()?.map(|c| c.channels()).max().unwrap_or(2)))).collect())
+                .unwrap_or_default();
+            HostDevices {
             host: h.id().name().to_string(),
-            inputs: h.input_devices().map(|d| d.filter_map(|x| x.name().ok()).collect()).unwrap_or_default(),
-            outputs: h.output_devices().map(|d| d.filter_map(|x| x.name().ok()).collect()).unwrap_or_default(),
+            input_channels: ins.iter().map(|x| x.1.min(MAX_CH as u16)).collect(),
+            output_channels: outs.iter().map(|x| x.1.min(MAX_CH as u16)).collect(),
+            inputs: ins.into_iter().map(|x| x.0).collect(),
+            outputs: outs.into_iter().map(|x| x.0).collect(),
             default_input: h.default_input_device().and_then(|d| d.name().ok()),
             default_output: h.default_output_device().and_then(|d| d.name().ok()),
-        })
+        }})
         .collect()
 }
 
@@ -153,6 +178,11 @@ fn find_host(name: &Option<String>) -> Result<cpal::Host> {
     }
 }
 
+/// Stereo by default; with `all` the most channels (up to MAX_CH).
+fn chan_rank(ch: u16, all: bool) -> u32 {
+    if all { (MAX_CH as u32).saturating_sub(ch.min(MAX_CH as u16) as u32) } else { ch.abs_diff(2) as u32 }
+}
+
 type Streams = (Option<cpal::Stream>, cpal::Stream);
 type TapConsumers = (rtrb::Consumer<f32>, rtrb::Consumer<f32>);
 
@@ -176,7 +206,7 @@ fn open_streams(
     let out_def = match out_dev.supported_output_configs() {
         Ok(it) => it
             .filter(|c| c.min_sample_rate() <= sr && c.max_sample_rate() >= sr && fmt_rank(c.sample_format()) < 99)
-            .min_by_key(|c| (fmt_rank(c.sample_format()), c.channels().abs_diff(2)))
+            .min_by_key(|c| (fmt_rank(c.sample_format()), chan_rank(c.channels(), cfg.all_channels)))
             .map(|c| c.with_sample_rate(sr))
             .unwrap_or(out_def),
         Err(_) => out_def,
@@ -207,7 +237,7 @@ fn open_streams(
         let range = dev
             .supported_input_configs()?
             .filter(|c| c.min_sample_rate() <= sr && c.max_sample_rate() >= sr && fmt_rank(c.sample_format()) < 99)
-            .min_by_key(|c| (fmt_rank(c.sample_format()), c.channels().abs_diff(2)))
+            .min_by_key(|c| (fmt_rank(c.sample_format()), chan_rank(c.channels(), cfg.all_channels)))
             .ok_or_else(|| anyhow!("input device does not support {} Hz (output rate)", sr.0))?;
         let sc = range.with_sample_rate(sr);
         let in_cfg = StreamConfig { channels: sc.channels(), sample_rate: sr, buffer_size: buffer_size.clone() };
@@ -248,6 +278,7 @@ fn open_streams(
         SampleFormat::U16 => build_output::<u16>(&out_dev, &out_cfg, ctx)?,
         f => return Err(anyhow!("unsupported output sample format {f:?}")),
     };
+    stats.routing.apply(&cfg.routing, in_info.1 as usize, out_cfg.channels as usize);
     if let Some(s) = &in_stream {
         s.play()?;
     }
@@ -275,9 +306,22 @@ where
         cfg,
         move |data: &[T], _| {
             let mut pk = [0f32; 2];
+            let mut chpk = [0f32; MAX_CH];
+            let rt = &stats.routing;
+            let nch = ch.min(MAX_CH);
+            let mut g = [[0f32; 2]; MAX_CH];
+            for (c, gc) in g.iter_mut().enumerate().take(nch) {
+                *gc = [rt.ins[c][0].get(), rt.ins[c][1].get()];
+            }
             for frame in data.chunks_exact(ch) {
-                let l = f32::from_sample(frame[0]);
-                let r = if ch > 1 { f32::from_sample(frame[1]) } else { l };
+                // input matrix: every device channel → board input L/R
+                let (mut l, mut r) = (0f32, 0f32);
+                for c in 0..nch {
+                    let x = f32::from_sample(frame[c]);
+                    chpk[c] = chpk[c].max(x.abs());
+                    l += x * g[c][0];
+                    r += x * g[c][1];
+                }
                 pk[0] = pk[0].max(l.abs());
                 pk[1] = pk[1].max(r.abs());
                 if prod.slots() >= 2 {
@@ -287,6 +331,9 @@ where
             }
             stats.in_peak[0].max(pk[0]);
             stats.in_peak[1].max(pk[1]);
+            for (c, p) in chpk.iter().enumerate().take(nch) {
+                rt.in_peak[c].max(*p);
+            }
         },
         move |e| {
             log::warn!("input stream error: {e}");
@@ -321,7 +368,7 @@ impl OutCtx {
         }
     }
 
-    fn render(&mut self, frames: usize, mut write: impl FnMut(usize, f32, f32)) {
+    fn render(&mut self, frames: usize, mut write: impl FnMut(usize, f32, f32, f32, f32)) {
         if !self.denormals_set {
             set_flush_denormals();
             self.denormals_set = true;
@@ -359,7 +406,13 @@ impl OutCtx {
             if under && done == 0 && self.input_primed {
                 self.stats.xruns.fetch_add(1, Relaxed);
             }
+            let bypass = self.stats.bypass.load(Relaxed);
             match &mut self.sched {
+                _ if bypass => {
+                    let (a, b) = self.outbuf.split_at_mut(1);
+                    a[0][..n].copy_from_slice(&self.inbuf[0][..n]);
+                    b[0][..n].copy_from_slice(&self.inbuf[1][..n]);
+                }
                 Some(s) => {
                     let ib = s.input_mut();
                     ib[0][..n].copy_from_slice(&self.inbuf[0][..n]);
@@ -398,13 +451,16 @@ impl OutCtx {
                         rec_drop += 1;
                     }
                 }
+                let (mut dl, mut dr) = (il.clamp(-1.0, 1.0), ir.clamp(-1.0, 1.0));
                 if mute {
                     l = 0.0;
                     r = 0.0;
+                    dl = 0.0;
+                    dr = 0.0;
                 }
                 pk[0] = pk[0].max(l.abs());
                 pk[1] = pk[1].max(r.abs());
-                write(done + i, l, r);
+                write(done + i, l, r, dl, dr);
             }
             if rec_drop > 0 {
                 self.stats.rec_dropped.fetch_add(rec_drop, Relaxed);
@@ -422,19 +478,32 @@ where
 {
     let ch = cfg.channels as usize;
     let st = ctx.stats.clone();
+    let st_out = ctx.stats.clone();
     Ok(dev.build_output_stream(
         cfg,
         move |data: &mut [T], _| {
             let t0 = Instant::now();
             let frames = data.len() / ch;
             data.fill(T::EQUILIBRIUM);
-            ctx.render(frames, |i, l, r| {
+            let rt = &st_out.routing;
+            let nch = ch.min(MAX_CH);
+            let mut g = [[0f32; 4]; MAX_CH];
+            for (c, gc) in g.iter_mut().enumerate().take(nch) {
+                *gc = [rt.outs[c][0].get(), rt.outs[c][1].get(), rt.outs[c][2].get(), rt.outs[c][3].get()];
+            }
+            let mut chpk = [0f32; MAX_CH];
+            ctx.render(frames, |i, l, r, il, ir| {
+                // output matrix: board L/R and the dry input → every device channel
                 let f = &mut data[i * ch..(i + 1) * ch];
-                f[0] = T::from_sample(l);
-                if ch > 1 {
-                    f[1] = T::from_sample(r);
+                for c in 0..nch {
+                    let v = (l * g[c][0] + r * g[c][1] + il * g[c][2] + ir * g[c][3]).clamp(-1.0, 1.0);
+                    chpk[c] = chpk[c].max(v.abs());
+                    f[c] = T::from_sample(v);
                 }
             });
+            for (c, p) in chpk.iter().enumerate().take(nch) {
+                rt.out_peak[c].max(*p);
+            }
             let budget = frames as f32 / ctx.sr;
             ctx.stats.load.max(t0.elapsed().as_secs_f32() / budget);
             ctx.stats.callback_frames.store(frames as u32, Relaxed);

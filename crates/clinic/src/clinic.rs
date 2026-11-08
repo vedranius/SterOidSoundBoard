@@ -111,7 +111,7 @@ pub struct Patient {
     pub updated: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Session {
     pub id: String,
     pub patient_id: String,
@@ -126,9 +126,89 @@ pub struct Session {
     /// Name of the clinical preset loaded when the session started.
     #[serde(default)]
     pub preset: Option<String>,
+    /// "procjena" (assessment), "terapija" (therapy), "kontrola" (follow-up) or empty.
+    #[serde(default)]
+    pub kind: String,
+    /// Structured documentation (SOAP).
+    #[serde(default)]
+    pub soap: Soap,
+    /// Planned tasks of the session (protocol checklist).
+    #[serde(default)]
+    pub tasks: Vec<SessionTask>,
+    /// Exercises for home.
+    #[serde(default)]
+    pub homework: String,
+    /// Next appointment, "YYYY-MM-DD" or "YYYY-MM-DDTHH:MM".
+    #[serde(default)]
+    pub next_date: String,
 }
 
+/// SOAP note: subjective, objective, assessment, plan.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Soap {
+    pub subjective: String,
+    pub objective: String,
+    pub assessment: String,
+    pub plan: String,
+}
+
+/// One planned task of a session (e.g. "Produženi vokal /a/").
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SessionTask {
+    pub id: String,
+    /// Speech task name (same names as `Recording::task`).
+    pub task: String,
+    pub done: bool,
+    pub note: String,
+}
+
+/// Perceptual voice rating of a recording.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Rating {
+    /// GRBAS: Grade, Roughness, Breathiness, Asthenia, Strain, each 0–3.
+    pub grbas: Option<[u8; 5]>,
+    /// CAPE-V visual-analogue scores 0–100: overall severity, roughness,
+    /// breathiness, strain, pitch, loudness.
+    pub capev: Option<[Option<f32>; 6]>,
+    pub rater: String,
+    pub note: String,
+    pub updated: u64,
+}
+
+/// Standardised questionnaire result (e.g. VHI-10), score only.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Questionnaire {
+    pub id: String,
+    pub patient_id: String,
+    /// e.g. "VHI-10", "VHI-30", "V-RQOL", "S-24", "OASES", "Drugo".
+    pub kind: String,
+    /// Unix ms of the assessment.
+    pub date: u64,
+    pub score: f32,
+    #[serde(default)]
+    pub max: Option<f32>,
+    #[serde(default)]
+    pub note: String,
+}
+
+/// Free clinical note in the patient's chart (clinician, or an AI assistant via MCP).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClinicalNote {
+    pub id: String,
+    pub patient_id: String,
+    pub created: u64,
+    #[serde(default)]
+    pub title: String,
+    pub text: String,
+    /// "clinician", "mcp:<client>" …
+    #[serde(default)]
+    pub source: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Recording {
     pub id: String,
     #[serde(default)]
@@ -158,6 +238,9 @@ pub struct Recording {
     /// Analyses the clinician saved (selection, settings and all measures at that time).
     #[serde(default)]
     pub analyses: Vec<SavedAnalysis>,
+    /// Perceptual rating (GRBAS / CAPE-V).
+    #[serde(default)]
+    pub rating: Option<Rating>,
 }
 
 /// A documented measurement: which part, with which settings, what came out.
@@ -385,6 +468,10 @@ pub struct Clinic {
     pub ai_reports: Vec<AiReport>,
     #[serde(default)]
     pub settings: ClinicSettings,
+    #[serde(default)]
+    pub questionnaires: Vec<Questionnaire>,
+    #[serde(default)]
+    pub notes: Vec<ClinicalNote>,
 }
 
 impl Clinic {
@@ -411,6 +498,8 @@ impl Clinic {
         let gone = self.recordings.iter().filter(|r| r.patient_id.as_deref() == Some(id)).map(|r| r.id.clone()).collect();
         self.recordings.retain(|r| r.patient_id.as_deref() != Some(id));
         self.ai_reports.retain(|a| a.patient_id.as_deref() != Some(id));
+        self.questionnaires.retain(|q| q.patient_id != id);
+        self.notes.retain(|n| n.patient_id != id);
         gone
     }
 }
@@ -457,6 +546,7 @@ mod tests {
                 .collect(),
             syllables: None,
             analyses: vec![],
+            rating: None,
         }
     }
 
@@ -515,7 +605,7 @@ mod tests {
         let mut c = Clinic::default();
         for id in ["a", "b"] {
             c.patients.push(Patient { id: id.into(), data: PatientIn { name: id.into(), ..Default::default() }, created: 0, updated: 0 });
-            c.sessions.push(Session { id: format!("s{id}"), patient_id: id.into(), start: 0, end: None, notes: String::new(), board: None, preset: None });
+            c.sessions.push(Session { id: format!("s{id}"), patient_id: id.into(), start: 0, end: None, notes: String::new(), board: None, preset: None, ..Default::default() });
             c.recordings.push(Recording {
                 id: format!("r{id}"),
                 patient_id: Some(id.into()),
@@ -530,6 +620,7 @@ mod tests {
                 annotations: vec![],
                 syllables: None,
             analyses: vec![],
+            rating: None,
             });
         }
         assert_eq!(c.remove_patient("a"), vec!["ra".to_string()]);

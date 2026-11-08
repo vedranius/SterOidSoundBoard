@@ -3,6 +3,7 @@
 mod i18n;
 mod ai;
 mod clinic;
+mod mcp;
 mod ollama;
 mod server;
 mod state;
@@ -14,10 +15,12 @@ struct Args {
     bind: String,
     port: u16,
     open_browser: bool,
+    data: Option<std::path::PathBuf>,
+    mcp: bool,
 }
 
 fn parse_args() -> Args {
-    let mut a = Args { bind: "0.0.0.0".into(), port: 8420, open_browser: true };
+    let mut a = Args { bind: "0.0.0.0".into(), port: 8420, open_browser: true, data: None, mcp: false };
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
         match arg.as_str() {
@@ -25,13 +28,15 @@ fn parse_args() -> Args {
             "--bind" => a.bind = it.next().unwrap_or(a.bind),
             "--local" => a.bind = "127.0.0.1".into(),
             "--no-browser" | "--headless" => a.open_browser = false,
+            "--data" => a.data = it.next().map(std::path::PathBuf::from),
+            "--mcp" => a.mcp = true,
             "--version" | "-V" => {
                 println!("steroidsoundboard {}", env!("CARGO_PKG_VERSION"));
                 std::process::exit(0);
             }
             "--help" | "-h" => {
                 println!(
-                    "steroidsoundboard {}\n\n  --port N       HTTP port (default 8420)\n  --bind ADDR    bind address (default 0.0.0.0)\n  --local        only listen on 127.0.0.1\n  --headless     don't open a browser (RPi/servers)\n",
+                    "steroidsoundboard {}\n\n  --port N       HTTP port (default 8420)\n  --bind ADDR    bind address (default 0.0.0.0)\n  --local        only listen on 127.0.0.1\n  --headless     don't open a browser (RPi/servers)\n  --data DIR     data directory (patients, recordings…); e.g. the folder the browser edition uses\n  --mcp          MCP server on stdin/stdout for AI assistants (Claude Desktop, Claude Code…)\n",
                     env!("CARGO_PKG_VERSION")
                 );
                 std::process::exit(0);
@@ -46,7 +51,12 @@ fn parse_args() -> Args {
 async fn main() -> anyhow::Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
     let args = parse_args();
-    let app = state::App::new();
+    let app = state::App::new(args.data.clone());
+    if args.mcp {
+        // stdout is the MCP channel: nothing else may be printed there
+        let port = args.port;
+        return tokio::task::spawn_blocking(move || mcp::run_stdio(app, port)).await?;
+    }
     log::info!("SterOidSoundBoard {} — data dir {}", env!("CARGO_PKG_VERSION"), app.paths.data.display());
 
     // Auto-start audio with the last (or default) configuration.

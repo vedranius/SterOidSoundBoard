@@ -14,6 +14,9 @@ async function api(method, path, body) {
 }
 function toast(msg) { const t = $("#toast"); t.textContent = I18N.t(String(msg)); t.classList.add("show"); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove("show"), 3000); }
 function send(o) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(o)); }
+// Sonagram nodes on screen, per view; the server computes their spectra only for these.
+const TAPVIEW = {};
+function tapView(view, ids) { TAPVIEW[view] = ids; send({ t: "taps", ids: [...new Set(Object.values(TAPVIEW).flat())] }); }
 function el(tag, cls, html) { const e = document.createElement(tag); if (cls) e.className = cls; if (html != null) e.innerHTML = html; return e; }
 
 const toSlider = (s, v) => s.log ? Math.log(v / s.min) / Math.log(s.max / s.min) * 1000 : (v - s.min) / (s.max - s.min) * 1000;
@@ -76,6 +79,14 @@ function render() {
   BOARD.nodes.forEach((n) => { boardEl.append(card(n)); maxX = Math.max(maxX, n.x + 230); });
   $("#io-out").style.left = maxX + 40 + "px";
   drawCables();
+  musicTaps();
+}
+// Monitor nodes on the pedalboard: live sonagram / VU meter in the card.
+const MON = {};
+const SONO_RANGE = [4000, 5000, 8000, 12000];
+function musicTaps() {
+  const vis = document.body.dataset.mode === "music";
+  tapView("music", vis ? BOARD.nodes.filter((n) => n.kind === "sonagram").map((n) => n.id) : []);
 }
 
 function card(n) {
@@ -120,6 +131,13 @@ function card(n) {
     if (tight) { row.append(val); fold.append(row); } else bd.append(row);
   });
   if (fold) bd.append(fold);
+  if (n.kind === "sonagram") {
+    const cv = el("canvas", "mon-sono"); bd.append(cv);
+    MON[n.id] = { sono: new Sono.TapView(cv, { fmax: SONO_RANGE[Math.round(n.params.range ?? 1)] || 5000 }) };
+  } else if (n.kind === "vu_meter") {
+    const box = el("div", "mon-vu"); bd.append(box);
+    MON[n.id] = { vu: new Sono.VuView(box) };
+  }
   const pin = el("b", "port in"); pin.dataset.node = n.id;
   const pout = el("b", "port out"); pout.dataset.node = n.id;
   c.append(hd, bd, pin, pout);
@@ -225,6 +243,13 @@ function onMsg(m) {
         const i = document.querySelector(`#c-${id} .nm i`);
         if (i) i.style.width = Math.min(100, Math.max(0, (20 * Math.log10(v + 1e-9) + 60) / 60 * 100)) + "%";
       }
+      if (document.body.dataset.mode === "music") {
+        for (const [id, v] of Object.entries(m.vu || {})) {
+          const mo = MON[id], n = BOARD.nodes.find((x) => x.id === id);
+          if (mo && mo.vu && n && document.getElementById("c-" + id)) mo.vu.update(v[0], v[1], n.params.target ?? -18, n.params.tolerance ?? 6);
+        }
+        for (const [id, live] of Object.entries(m.taps || {})) { const mo = MON[id]; if (mo && mo.sono && document.getElementById("c-" + id)) mo.sono.push(live); }
+      }
       break;
   }
   emitHooks(m);
@@ -266,6 +291,7 @@ $("#btnPresetDel").onclick = async () => {
 // Music (pedalboard) and DigiLingua (clinical) are two views of the same board and engine.
 function setMode(mode) {
   document.body.dataset.mode = mode;
+  musicTaps();
   document.querySelectorAll("#modes button").forEach((b) => b.classList.toggle("sel", b.dataset.mode === mode));
   $("#music").classList.toggle("hidden", mode !== "music");
   $("#clinic").classList.toggle("hidden", mode !== "clinic");

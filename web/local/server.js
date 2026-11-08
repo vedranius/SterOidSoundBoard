@@ -16,7 +16,7 @@ const SsbServer = (() => {
   // ---------------------------------------------------------------- state
   const S = {
     board: null, live: false, current_preset: null, clinic: null, ai: null, audioCfg: {},
-    dirty: false, mute: false, tap: 0, liveSubs: 0, liveWin: 0.005,
+    dirty: false, mute: false, tap: 0, liveSubs: 0, liveWin: 0.005, bypassAll: false,
     reports: new Map(), tracks: [], tasks: [], recording: null, lastError: null,
   };
   let seq = 0;
@@ -41,7 +41,17 @@ const SsbServer = (() => {
     try { return JSON.parse(dec.decode(b)); } catch (_) { return null; }
   }
   const writeJson = (path, v) => queue(() => store.write(path, enc.encode(pretty(v))));
+  const deleted = new Set(); // ids of notes/opinions/questionnaires removed here
   async function saveClinic() {
+    // A shared folder can also be written by the desktop app's MCP server (an AI
+    // assistant saving a note): keep entries that appeared there meanwhile.
+    if (store.kind === "folder") {
+      const disk = await readJson("clinic.json").catch(() => null);
+      if (disk) for (const k of ["notes", "ai_reports", "questionnaires"]) {
+        const have = new Set(S.clinic[k].map((x) => x.id));
+        for (const x of disk[k] || []) if (x && x.id && !have.has(x.id) && !deleted.has(x.id)) S.clinic[k].push(x);
+      }
+    }
     await writeJson("clinic.json", S.clinic);
     emit({ t: "clinic" });
   }
@@ -259,8 +269,26 @@ const SsbServer = (() => {
       if (S.liveSubs > 0) live = E.call("live_frames", { win: S.liveWin });
     }
     const pk = a.takePeaks();
+    const [chIn, chOut] = a.running ? a.takeChannels() : [[], []];
+    // display nodes: VU (RMS + peak of the period), sonagrams someone is looking at
+    const vu = {}, taps = {}, view = new Set([...sockets].flatMap((ws) => ws.taps || []));
+    const raw = a.running ? a.takeTaps() : {};
+    for (const n of S.board.nodes) {
+      if (n.kind !== "vu_meter" && n.kind !== "sonagram") continue;
+      const chunks = raw[n.id] || [];
+      if (n.kind === "vu_meter") {
+        let sum = 0, cnt = 0, p = 0;
+        for (const c of chunks) for (const v of c) { sum += v * v; cnt++; if (Math.abs(v) > p) p = Math.abs(v); }
+        vu[n.id] = [cnt ? Math.sqrt(sum / cnt) : 0, p];
+      } else if (view.has(n.id) && a.running) {
+        E.call("live_select", { key: n.id, sr: a.sr });
+        for (const c of chunks) E.livePush(c);
+        taps[n.id] = E.call("live_frames", {});
+        E.call("live_select", { key: "", sr: a.sr });
+      }
+    }
     emit({ live, rec: S.recording ? S.recording.frames / a.sr : null, rec_dropped: 0, mute: S.mute, t: "meters",
-      in: [pk[0], pk[1]], out: [pk[2], pk[3]], load: 0, xruns: 0, frames: a.frames, nodes: a.takeNodes() });
+      in: [pk[0], pk[1]], out: [pk[2], pk[3]], load: 0, xruns: 0, frames: a.frames, nodes: a.takeNodes(), ch_in: chIn, ch_out: chOut, bypass_all: S.bypassAll, vu, taps });
   }, 50);
 
   // ---------------------------------------------------------------- routes
@@ -268,14 +296,22 @@ const SsbServer = (() => {
   const routes = [];
   const R = (method, pattern, fn) => routes.push([method, new RegExp("^" + pattern.replace(/\{(\w+)\}/g, "(?<$1>[^/]+)") + "$"), fn]);
 
-  R("GET", "/api/status", () => ({ version: VERSION, running: SsbAudio.info(), config: S.audioCfg, error: S.lastError, mute: S.mute, preset: S.current_preset, recording: !!S.recording, edition: "web" }));
+  R("GET", "/api/status", () => ({ version: VERSION, running: SsbAudio.info(), config: S.audioCfg, error: S.lastError, mute: S.mute, preset: S.current_preset, recording: !!S.recording, bypass_all: S.bypassAll, edition: "web" }));
+  R("PUT", "/api/audio/routing", async (q) => {
+    const r = E.call("routing_sanitized", q.body || {});
+    S.audioCfg.routing = r;
+    SsbAudio.send({ t: "routing", routing: r });
+    await queue(() => store.write("audio.json", enc.encode(pretty(S.audioCfg))));
+    emit({ t: "routing", routing: r });
+    return r;
+  });
   R("GET", "/api/devices", () => SsbAudio.devices());
   R("GET", "/api/node-types", () => E.call("node_types"));
   R("POST", "/api/audio/start", async (q) => {
     if (S.recording) await stopRecording().catch(() => {});
     S.audioCfg = q.body || {};
     try {
-      const info = await SsbAudio.start(S.audioCfg, S.board, { mute: S.mute, tap: S.tap });
+      const info = await SsbAudio.start(S.audioCfg, S.board, { mute: S.mute, tap: S.tap, bypass: S.bypassAll });
       S.lastError = null;
       queue(() => store.write("audio.json", enc.encode(pretty(S.audioCfg))));
       emit({ t: "audio", running: info });
@@ -349,30 +385,103 @@ const SsbServer = (() => {
     c.patients = c.patients.filter((p) => p.id !== q.id);
     c.sessions = c.sessions.filter((s) => s.patient_id !== q.id);
     c.recordings = c.recordings.filter((r) => r.patient_id !== q.id);
+    for (const k of ["ai_reports", "questionnaires", "notes"]) c[k].filter((x) => x.patient_id === q.id).forEach((x) => deleted.add(x.id));
     c.ai_reports = c.ai_reports.filter((a) => a.patient_id !== q.id);
+    c.questionnaires = c.questionnaires.filter((x) => x.patient_id !== q.id);
+    c.notes = c.notes.filter((x) => x.patient_id !== q.id);
     for (const r of gone) await queue(() => store.remove(`recordings/${r}.wav`));
     await saveClinic(); return null;
   });
   R("GET", "/api/sessions", (q) => S.clinic.sessions.filter((s) => !q.query.patient || s.patient_id === q.query.patient)
-    .map((s) => ({ id: s.id, patient_id: s.patient_id, start: s.start, end: s.end ?? null, notes: s.notes, preset: s.preset ?? null, recordings: S.clinic.recordings.filter((r) => r.session_id === s.id).length })).reverse());
+    .map((s) => ({ id: s.id, patient_id: s.patient_id, start: s.start, end: s.end ?? null, notes: s.notes, preset: s.preset ?? null, recordings: S.clinic.recordings.filter((r) => r.session_id === s.id).length,
+      kind: s.kind || "", next_date: s.next_date || "", tasks_done: (s.tasks || []).filter((t) => t.done).length, tasks: (s.tasks || []).length })).reverse());
   R("POST", "/api/sessions", async (q) => {
     const c = S.clinic;
     if (!c.patients.some((p) => p.id === q.body.patient_id)) throw new HttpError("no such patient");
     const t = now();
     c.sessions.filter((s) => s.end == null).forEach((s) => (s.end = t));
-    const s = { id: newId("s"), patient_id: q.body.patient_id, start: t, end: null, notes: "", board: structuredClone(S.board), preset: S.current_preset };
+    const proto = q.body.protocol && E.call("protocols").protocols.find((p) => p.id === q.body.protocol);
+    const tasks = proto ? proto.tasks.map((task, i) => ({ id: `t${i}`, task, done: false, note: "" })) : [];
+    const s = { id: newId("s"), patient_id: q.body.patient_id, start: t, end: null, notes: "", board: structuredClone(S.board), preset: S.current_preset,
+      kind: String(q.body.kind || "").slice(0, 40), soap: { subjective: "", objective: "", assessment: "", plan: "" }, tasks, homework: "", next_date: "" };
     c.sessions.push(s); await saveClinic();
-    return { id: s.id, patient_id: s.patient_id, start: s.start, end: s.end, notes: s.notes };
+    return { id: s.id, patient_id: s.patient_id, start: s.start, end: s.end, notes: s.notes, kind: s.kind, tasks: s.tasks };
   });
-  const sessionEdit = async (id, notes, stop) => {
+  const sessionEdit = async (id, e, stop) => {
     const s = S.clinic.sessions.find((x) => x.id === id);
     if (!s) throw new HttpError("no such session");
-    if (notes != null) { if (notes.length > 100000) throw new HttpError("notes too long"); s.notes = notes; }
+    e = e || {};
+    if (e.notes != null) { if (e.notes.length > 100000) throw new HttpError("notes too long"); s.notes = e.notes; }
+    if (e.kind != null) s.kind = String(e.kind).slice(0, 40);
+    if (e.soap != null) {
+      const x = { subjective: "", objective: "", assessment: "", plan: "", ...e.soap };
+      if (Object.values(x).some((v) => String(v).length > 50000)) throw new HttpError("SOAP too long");
+      s.soap = { subjective: String(x.subjective), objective: String(x.objective), assessment: String(x.assessment), plan: String(x.plan) };
+    }
+    if (e.tasks != null) {
+      if (e.tasks.length > 100) throw new HttpError("too many tasks");
+      s.tasks = e.tasks.map((x) => ({ id: String(x.id || "").replace(/[^A-Za-z0-9-]/g, "").slice(0, 40), task: String(x.task || "").slice(0, 200), done: !!x.done, note: String(x.note || "").slice(0, 2000) }));
+    }
+    if (e.homework != null) { if (e.homework.length > 50000) throw new HttpError("homework too long"); s.homework = String(e.homework); }
+    if (e.next_date != null) s.next_date = String(e.next_date).slice(0, 20);
     if (stop && s.end == null) s.end = now();
     await saveClinic(); return null;
   };
-  R("PUT", "/api/sessions/{id}", (q) => sessionEdit(q.id, q.body.notes, false));
-  R("POST", "/api/sessions/{id}/stop", (q) => sessionEdit(q.id, (q.body || {}).notes, true));
+  R("PUT", "/api/sessions/{id}", (q) => sessionEdit(q.id, q.body, false));
+  R("POST", "/api/sessions/{id}/stop", (q) => sessionEdit(q.id, q.body, true));
+  R("GET", "/api/protocols", () => E.call("protocols"));
+  R("GET", "/api/patients/{id}/profile", async (q) => {
+    if (!S.clinic.patients.some((p) => p.id === q.id)) throw new HttpError("no such patient");
+    let v = S.clinic.recordings.filter((r) => r.patient_id === q.id && (!q.query.session || r.session_id === q.query.session)).sort((a, b) => b.created - a.created);
+    if (!q.query.session) { const seen = {}; v = v.filter((r) => (seen[r.task] = (seen[r.task] || 0) + 1) <= (r.task.startsWith("Produženi vokal") ? 3 : 1)); }
+    const st = sanitized(null), items = [];
+    for (const r of v) { try { items.push([r, await wholeReport(r.id, st)]); } catch (_) {} }
+    return { profile: E.call("voice_profile", { items, calibration_db: S.clinic.settings.calibration_db ?? null }), recordings: items.map(([r]) => ({ id: r.id, task: r.task, created: r.created })) };
+  });
+  R("GET", "/api/patients/{id}/chart", (q) => {
+    const c = S.clinic, p = c.patients.find((x) => x.id === q.id);
+    if (!p) throw new HttpError("no such patient");
+    const recs = c.recordings.filter((r) => r.patient_id === q.id).sort((a, b) => b.created - a.created);
+    return {
+      patient: p, age: E.call("age_at", { birth: p.birth, at: now() }),
+      sessions: c.sessions.filter((s) => s.patient_id === q.id).sort((a, b) => b.start - a.start).map((s) => ({ id: s.id, start: s.start, end: s.end ?? null, kind: s.kind || "", preset: s.preset ?? null, notes: s.notes,
+        soap: s.soap || {}, tasks: s.tasks || [], homework: s.homework || "", next_date: s.next_date || "", recordings: recs.filter((r) => r.session_id === s.id).map((r) => r.id) })),
+      recordings: recs.map((r) => ({ id: r.id, created: r.created, task: r.task, label: r.label, duration: r.duration, source: r.source, session_id: r.session_id, notes: r.notes, rating: r.rating ?? null,
+        annotations: r.annotations.length, saved_analyses: r.analyses.map((a) => ({ id: a.id, created: a.created, start: a.start, end: a.end, label: a.label, f0_mean: a.report.f0_mean, jitter_local: a.report.jitter_local, shimmer_local: a.report.shimmer_local, hnr_db: a.report.hnr_db, cpps: a.report.cpps })) })),
+      questionnaires: c.questionnaires.filter((x) => x.patient_id === q.id).sort((a, b) => a.date - b.date),
+      notes: c.notes.filter((x) => x.patient_id === q.id).sort((a, b) => b.created - a.created),
+      ai_reports: c.ai_reports.filter((a) => a.patient_id === q.id).sort((a, b) => b.created - a.created),
+      settings: { calibrated: c.settings.calibration_db != null, clinic_name: c.settings.clinic_name },
+    };
+  });
+  R("GET", "/api/patients/{id}/questionnaires", (q) => S.clinic.questionnaires.filter((x) => x.patient_id === q.id).sort((a, b) => a.date - b.date));
+  R("POST", "/api/patients/{id}/questionnaires", async (q) => {
+    const b = q.body || {};
+    if (!isFinite(b.score) || !String(b.kind || "").trim()) throw new HttpError(tr("neispravan upitnik", "invalid questionnaire"));
+    if (!S.clinic.patients.some((p) => p.id === q.id)) throw new HttpError("no such patient");
+    const x = { id: newId("q"), patient_id: q.id, kind: String(b.kind).trim().slice(0, 60), date: b.date || now(), score: +b.score, max: isFinite(b.max) && b.max != null ? +b.max : null, note: String(b.note || "").slice(0, 5000) };
+    S.clinic.questionnaires.push(x); await saveClinic(); return x;
+  });
+  R("DELETE", "/api/questionnaires/{id}", async (q) => {
+    deleted.add(q.id);
+    const n = S.clinic.questionnaires.length; S.clinic.questionnaires = S.clinic.questionnaires.filter((x) => x.id !== q.id);
+    if (S.clinic.questionnaires.length === n) throw new HttpError("no such questionnaire");
+    await saveClinic(); return null;
+  });
+  R("GET", "/api/patients/{id}/notes", (q) => S.clinic.notes.filter((x) => x.patient_id === q.id).sort((a, b) => b.created - a.created));
+  R("POST", "/api/patients/{id}/notes", async (q) => {
+    const text = String((q.body || {}).text || "").trim();
+    if (!text || text.length > 200000) throw new HttpError(tr("bilješka je prazna ili preduga", "the note is empty or too long"));
+    if (!S.clinic.patients.some((p) => p.id === q.id)) throw new HttpError("no such patient");
+    const n = { id: newId("n"), patient_id: q.id, created: now(), title: String(q.body.title || "").trim().slice(0, 300), text, source: "clinician" };
+    S.clinic.notes.push(n); await saveClinic(); return n;
+  });
+  R("DELETE", "/api/notes/{id}", async (q) => {
+    deleted.add(q.id);
+    const n = S.clinic.notes.length; S.clinic.notes = S.clinic.notes.filter((x) => x.id !== q.id);
+    if (S.clinic.notes.length === n) throw new HttpError("no such note");
+    await saveClinic(); return null;
+  });
   R("GET", "/api/sessions/{id}/detail", (q) => {
     const s = S.clinic.sessions.find((x) => x.id === q.id);
     if (!s) throw new HttpError("no such session");
@@ -426,12 +535,17 @@ const SsbServer = (() => {
     if (e.notes != null) r.notes = [...String(e.notes)].slice(0, 20000).join("");
     if (e.annotations != null) r.annotations = E.call("annotations_check", { annotations: e.annotations, duration: r.duration, en: en() });
     if (e.syllables != null) r.syllables = e.syllables > 0 ? Math.min(e.syllables, 1000000) : null;
+    if ("rating" in e) r.rating = !e.rating ? null : {
+      grbas: Array.isArray(e.rating.grbas) ? e.rating.grbas.slice(0, 5).map((v) => Math.min(Math.max(Math.round(+v) || 0, 0), 3)) : null,
+      capev: Array.isArray(e.rating.capev) ? e.rating.capev.slice(0, 6).map((v) => (v == null || !isFinite(v) ? null : Math.min(Math.max(+v, 0), 100))) : null,
+      rater: String(e.rating.rater || "").slice(0, 200), note: String(e.rating.note || "").slice(0, 5000), updated: now() };
     await saveClinic(); return null;
   });
   R("DELETE", "/api/recordings/{id}", async (q) => {
     const c = S.clinic;
     if (!recById(q.id)) throw new HttpError("no such recording");
     c.recordings = c.recordings.filter((r) => r.id !== q.id);
+    c.ai_reports.filter((a) => a.recording_id === q.id).forEach((a) => deleted.add(a.id));
     c.ai_reports = c.ai_reports.filter((a) => a.recording_id !== q.id);
     wavCache.delete(q.id);
     await queue(() => store.remove(`recordings/${q.id}.wav`));
@@ -505,7 +619,8 @@ const SsbServer = (() => {
         f0_mean: g((x) => x.f0_mean), f0_sd: g((x) => x.f0_sd), f0_range_st: g((x) => x.f0_range_st), jitter_local: g((x) => x.jitter_local), shimmer_local: g((x) => x.shimmer_local),
         hnr_db: g((x) => x.hnr_db), cpps: g((x) => x.cpps), intensity_mean_db: g((x) => x.intensity_mean_db), max_voiced_s: g((x) => x.max_voiced_s),
         speech_rate: g((x) => x.speech_rate), articulation_rate: g((x) => x.articulation_rate), pauses: g((x) => x.pauses), f1: g((x) => x.formants[0]), f2: g((x) => x.formants[1]),
-        disfluencies: sum.total, sld: sum.sld, pct_ss: sum.pct_ss });
+        disfluencies: sum.total, sld: sum.sld, pct_ss: sum.pct_ss,
+        grbas_g: r.rating && r.rating.grbas ? r.rating.grbas[0] : null, capev_overall: r.rating && r.rating.capev ? r.rating.capev[0] : null });
     }
     return { settings: st, rows };
   });
@@ -567,6 +682,9 @@ const SsbServer = (() => {
     await writeJson("ai.json", c);
     return SsbAi.pub(c);
   });
+  // AI assistants (MCP) need the desktop app: the browser cannot accept connections.
+  R("GET", "/api/mcp/config", () => ({ config: null, web: true }));
+  R("GET", "/api/ai/models", () => SsbAi.listModels(S.ai));
   R("POST", "/api/ai/test", async () => { const a = await SsbAi.test(S.ai); return { ok: true, model: a.model, text: [...a.text].slice(0, 200).join("") }; });
   R("POST", "/api/recordings/{id}/ai/preview", async (q) => {
     const j = await aiJob(q.id, q.body || {});
@@ -601,6 +719,7 @@ const SsbServer = (() => {
   });
   R("POST", "/api/ai/ollama/delete", async (q) => { await SsbAi.ollamaDelete(ollamaRootFor(null), checkModel(q.body.model)); return null; });
   R("DELETE", "/api/ai-reports/{id}", async (q) => {
+    deleted.add(q.id);
     const n = S.clinic.ai_reports.length; S.clinic.ai_reports = S.clinic.ai_reports.filter((a) => a.id !== q.id);
     if (S.clinic.ai_reports.length === n) throw new HttpError("no such AI report");
     await saveClinic(); return null;
@@ -649,6 +768,8 @@ const SsbServer = (() => {
         else if (m.t === "move") { const n = node(m.node); if (n) { n.x = m.x; n.y = m.y; S.dirty = true; } emit({ t: "move", node: m.node, x: m.x, y: m.y, src: this.me }); }
         else if (m.t === "mute") { S.mute = !!m.on; SsbAudio.send({ t: "mute", on: S.mute }); emit({ t: "mute", on: S.mute }); }
         else if (m.t === "tap") { S.tap = Math.min(m.src | 0, 1); SsbAudio.send({ t: "tap", src: S.tap }); }
+        else if (m.t === "bypass_all") { S.bypassAll = !!m.on; SsbAudio.send({ t: "bypass_all", on: S.bypassAll }); emit({ t: "bypass_all", on: S.bypassAll }); }
+        else if (m.t === "taps") { this.taps = (m.ids || []).slice(0, 16); E.call("live_drop", [...new Set([...sockets].flatMap((ws) => ws.taps || []))]); }
         else if (m.t === "live") {
           if (typeof m.win === "number" && isFinite(m.win)) S.liveWin = Math.min(Math.max(m.win, 0.002), 0.05);
           if (!!m.on !== this.live) { this.live = !!m.on; S.liveSubs += this.live ? 1 : -1; }

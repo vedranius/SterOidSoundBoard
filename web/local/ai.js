@@ -342,9 +342,23 @@ const SsbAi = (() => {
     const uc = image ? [{ type: "text", text: user }, { type: "image_url", image_url: { url: `data:${image[0]};base64,${image[1]}` } }] : user;
     return openaiStream(url, headers, { model, messages: [{ role: "system", content: system }, { role: "user", content: uc }], stream: true }, p);
   }
+  /** Model ids of the configured service, free OpenRouter models first. */
+  async function listModels(c) {
+    const b = base(c);
+    let url, headers = {};
+    if (c.provider === "ollama") url = `${b}/api/tags`;
+    else if (c.provider === "anthropic") { url = (b.endsWith("/v1") ? `${b}/models` : `${b}/v1/models`) + "?limit=100"; headers = { "x-api-key": c.api_key.trim(), "anthropic-version": ANTHROPIC_VERSION, "anthropic-dangerous-direct-browser-access": "true" }; }
+    else { url = `${b}/models`; if (c.api_key) headers = { authorization: `Bearer ${c.api_key.trim()}` }; }
+    let r;
+    try { r = await fetch(url, { headers }); } catch (e) { throw netError(url, e); }
+    if (!r.ok) throw new Error(errorMessage(r.status, await r.text().catch(() => "")));
+    const v = await r.json();
+    const ids = [...new Set((v.data || v.models || []).map((m) => m.id || m.name).filter(Boolean))];
+    return ids.sort((a, b) => (a.endsWith(":free") === b.endsWith(":free") ? a.toLowerCase().localeCompare(b.toLowerCase()) : a.endsWith(":free") ? -1 : 1));
+  }
   const silent = () => { const ac = new AbortController(); return { log() {}, delta() {}, stats() {}, cancelled: () => false, signal: ac.signal }; };
   const test = (c) => (en() ? ask(c, "Answer briefly.", "This is a connection test. Answer with the single word: OK", null, 1024, silent())
     : ask(c, "Odgovaraj kratko.", "Ovo je test veze. Odgovori samo riječju: OK", null, 1024, silent()));
 
-  return { DEFAULT_CLAUDE_MODEL, OLLAMA_URL, OLLAMA_MODEL, MAX_TOKENS, defaults, base, providerName, pub, check, parseImage, ask, test, ollamaRoot, ollamaStatus, ollamaPull, ollamaDelete };
+  return { listModels, DEFAULT_CLAUDE_MODEL, OLLAMA_URL, OLLAMA_MODEL, MAX_TOKENS, defaults, base, providerName, pub, check, parseImage, ask, test, ollamaRoot, ollamaStatus, ollamaPull, ollamaDelete };
 })();

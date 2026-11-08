@@ -76,6 +76,8 @@
     dspIn(ch, n) { return new Float32Array(this.mem, this.x.dsp_in(ch), n); }
     dspOut(ch, n) { return new Float32Array(this.mem, this.x.dsp_out(ch), n); }
     dspProcess(n) { this.x.dsp_process(n); }
+    /** Samples display node `i` published since the last read (a copy). */
+    dspTapRead(i) { const n = this.x.dsp_tap_read(i); return n ? new Float32Array(this.mem, this.x.dsp_tap_ptr(), n).slice() : null; }
   }
 
   /** Instantiate from bytes, a Response promise or a compiled WebAssembly.Module. */

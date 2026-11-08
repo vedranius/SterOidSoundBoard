@@ -9,6 +9,7 @@ pub mod nodes;
 pub mod praat;
 #[cfg(feature = "native")]
 pub mod record;
+pub mod routing;
 pub mod templates;
 pub mod wav;
 

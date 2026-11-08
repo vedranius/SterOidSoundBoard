@@ -1,5 +1,5 @@
 //! Board (serializable pedalboard) and Schedule (compiled, RT-ready graph).
-use crate::nodes::{new_buf, AtomicF32, Buf, NodeKind, Processor};
+use crate::nodes::{new_buf, AtomicF32, Buf, NodeKind, Processor, TapRing};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
@@ -145,6 +145,8 @@ pub struct LiveNode {
     pub params: Arc<[AtomicF32]>,
     pub bypass: Arc<AtomicBool>,
     pub meter: Arc<AtomicF32>,
+    /// Audio of display nodes (VU meter, sonagram) for the control thread.
+    pub tap: Option<Arc<TapRing>>,
 }
 
 impl LiveNode {
@@ -160,6 +162,7 @@ impl LiveNode {
             params: Arc::from(params),
             bypass: Arc::new(AtomicBool::new(d.bypass)),
             meter: Arc::new(AtomicF32::new(0.0)),
+            tap: d.kind.has_tap().then(|| Arc::new(TapRing::new())),
         }
     }
 }
@@ -191,7 +194,7 @@ impl Schedule {
             let ln = live.get(id).ok_or_else(|| format!("missing live node {id}"))?;
             let sources = board.connections.iter().filter(|c| &c.to == id).filter_map(|c| buf_of(&c.from)).collect();
             steps.push(Step {
-                proc: ln.kind.create(sr),
+                proc: ln.kind.create_tapped(sr, ln.tap.clone()),
                 sources,
                 params: ln.params.clone(),
                 bypass: ln.bypass.clone(),

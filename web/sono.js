@@ -291,5 +291,68 @@ const Sono = (() => {
       hv.textContent = h ? `−${h.ago.toFixed(2)} s · ${h.f.toFixed(0)} Hz · ${h.db != null ? h.db.toFixed(1) + " dB" : ""}${h.frame && h.frame.f0 > 0 ? " · F0 " + h.frame.f0.toFixed(1) + " Hz" : ""}` : "";
     }
   }
-  return { lut, ticks, fmtHz, colorbar, fft, gaussWindow, pal, LiveSono, MAPS: NAMES };
+  // ------------------------------------------------------------ compact monitors (sonagram / VU nodes)
+  /** Small scrolling sonagram of one point of the chain (a Sonagram node). */
+  class TapView {
+    constructor(canvas, opts = {}) {
+      this.cv = canvas; this.g = canvas.getContext("2d"); this.fmax = opts.fmax || 5000; this.map = opts.map || "toplo";
+      this.recentMax = 0; this.f0 = [];
+      new ResizeObserver(() => this.resize()).observe(canvas);
+      this.resize();
+    }
+    resize() {
+      const d = window.devicePixelRatio || 1, w = Math.max(80, Math.round(this.cv.clientWidth * d)), h = Math.max(40, Math.round(this.cv.clientHeight * d));
+      if (this.cv.width === w && this.cv.height === h) return;
+      this.cv.width = w; this.cv.height = h; this.g.fillStyle = "#000"; this.g.fillRect(0, 0, w, h);
+    }
+    push(live) {
+      if (!live || !live.frames || !live.frames.length) return;
+      const g = this.g, W = this.cv.width, H = this.cv.height, n = live.frames.length, lut = Sono.lut(this.map);
+      const cols = Math.max(1, Math.round(n * W / 400)); // ≈ 4 s across
+      g.drawImage(this.cv, -cols, 0);
+      const img = g.createImageData(cols, H);
+      live.frames.forEach((f, k) => {
+        const bin = atob(f.s), a = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) a[i] = bin.charCodeAt(i);
+        let m = 0; for (let i = 2; i < a.length; i++) if (a[i] > m) m = a[i];
+        this.recentMax = Math.max(m, this.recentMax * 0.995);
+        const top = Math.max(-70, live.db_min + this.recentMax * live.db_step), lo = top - 70;
+        const x0 = Math.floor(k * cols / n), x1 = Math.max(x0 + 1, Math.floor((k + 1) * cols / n));
+        for (let y = 0; y < H; y++) {
+          const f = (1 - y / H) * this.fmax, b = Math.min(a.length - 1, Math.round(f / live.df));
+          const db = live.db_min + a[b] * live.db_step, v = a[b] === 0 ? 0 : Math.max(0, Math.min(255, Math.round((db - lo) / (top - lo) * 255)));
+          for (let x = x0; x < x1 && x < cols; x++) { const o = (y * cols + x) * 4; img.data[o] = lut[v * 3]; img.data[o + 1] = lut[v * 3 + 1]; img.data[o + 2] = lut[v * 3 + 2]; img.data[o + 3] = 255; }
+        }
+        if (f.f0 > 0 && f.f0 < this.fmax) { const y = Math.round((1 - f.f0 / this.fmax) * H); for (let x = x0; x < x1 && x < cols; x++) for (let dy = 0; dy < 2; dy++) { const o = ((y + dy) * cols + x) * 4; if (o >= 0 && o < img.data.length) { img.data[o] = 77; img.data[o + 1] = 210; img.data[o + 2] = 255; } } }
+      });
+      g.putImageData(img, W - cols, 0);
+    }
+  }
+
+  /** VU meter with VU ballistics (300 ms), peak hold and an optional target zone. */
+  class VuView {
+    constructor(host) {
+      this.host = host; this.vu = -90; this.hold = -90; this.holdT = 0; this.t = performance.now();
+      host.innerHTML = '<div class="vuv"><div class="vuv-bar"><i class="zone"></i><i class="lvl"></i><s></s></div><div class="vuv-txt mono"><b class="v">—</b><span class="pk dim"></span><span class="tg dim"></span></div></div>';
+      this.zone = host.querySelector(".zone"); this.lvl = host.querySelector(".lvl"); this.pk = host.querySelector("s");
+    }
+    update(rms, peak, target, tol) {
+      const now = performance.now(), dt = Math.min(0.5, (now - this.t) / 1000); this.t = now;
+      const db = 20 * Math.log10(rms + 1e-9), a = 1 - Math.exp(-dt / 0.3);
+      this.vu = Math.max(-90, this.vu + (db - this.vu) * a);
+      const pdb = 20 * Math.log10(peak + 1e-9);
+      if (pdb >= this.hold || now - this.holdT > 2000) { this.hold = pdb; this.holdT = now; }
+      const pct = (d) => Math.max(0, Math.min(100, (d + 60) / 60 * 100));
+      this.lvl.style.width = pct(this.vu) + "%";
+      this.pk.style.left = `calc(${pct(this.hold)}% - 2px)`;
+      const ok = target != null && Math.abs(this.vu - target) <= tol;
+      if (target != null) { this.zone.style.left = pct(target - tol) + "%"; this.zone.style.width = pct(target + tol) - pct(target - tol) + "%"; }
+      this.lvl.classList.toggle("ok", ok); this.lvl.classList.toggle("lo", target != null && this.vu < target - tol); this.lvl.classList.toggle("hi", target != null && this.vu > target + tol);
+      this.host.querySelector(".v").textContent = this.vu > -89 ? this.vu.toFixed(1) + " dB" : "—";
+      this.host.querySelector(".pk").textContent = this.hold > -89 ? "vrh " + this.hold.toFixed(1) : "";
+      this.host.querySelector(".tg").textContent = target != null ? (ok ? "✓ u cilju" : this.vu < target - tol ? "↑ glasnije" : "↓ tiše") : "";
+    }
+  }
+
+  return { lut, ticks, fmtHz, colorbar, fft, gaussWindow, pal, LiveSono, TapView, VuView, MAPS: NAMES };
 })();
