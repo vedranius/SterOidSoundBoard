@@ -28,7 +28,8 @@ dictionary pair (or pattern). Server: `x-lang: en` header / `?lang=en` → task-
 - `crates/engine` (steroid-engine): `audio.rs` cpal I/O + taps (spectrum ring, recorder ring, mute),
   `graph.rs` Board/Schedule (DAG, topo sort, lock-free swap via rtrb, garbage returned to control
   thread, `sanitize()` for foreign boards, node roles), `nodes.rs` built-in DSP + ParamSpec
-  (11 nodes incl. Eq31, Daf, PitchShift, Noise, Interrupter, Channels), `fft.rs` FFT,
+  (19 nodes incl. Eq31, Daf, PitchShift, Noise, Interrupter, Channels, Compressor, NoiseGate,
+  Limiter, Chorus, Metronome, Notch, VuMeter/Sonagram display nodes with wait-free tap rings), `fft.rs` FFT,
   `praat/` Praat ports (pitch, pulses, voice report, intensity, Burg formants, CPPS, resampling,
   sinc) — validated against Praat 7 (VALIDATION.md, `tools/validate.sh`; keep it that way: any
   change there must re-run the comparison), `analysis.rs` VoiceReport/Tracks on top of `praat/` +
@@ -62,6 +63,10 @@ dictionary pair (or pattern). Server: `x-lang: en` header / `?lang=en` → task-
   https://steroidsoundboard.geekranius.stream (CI job `web` deploys from main when the
   CLOUDFLARE_API_TOKEN secret exists; direct upload from a cloud session fails because the proxy
   replaces wrangler's upload JWT — deploy via CI). `tools/check-wasm.js` = wasm vs native.
+- v0.8 additions: `crates/engine/src/routing.rs` full input/output channel matrix (all device
+  channels, headphone pairs), `crates/clinic/src/protocol.rs` session tasks/protocols + voice profile
+  (MPT, s/z, DSI), `crates/app/src/mcp.rs` MCP server (stdio `--mcp` + HTTP `/mcp`, token, pseudonym
+  identity by default), `web/practice.js` Karton/session workflow/prompter/GRBAS+CAPE-V/FILTER bar/matrix.
 - `packaging/linux/` systemd unit + RPi install script. `.github/workflows/build.yml` CI + releases on `v*` tags.
 
 ## Conventions
@@ -86,18 +91,21 @@ v0.5.0 DigiLingua-style professional UI (light default), analysis page, audio up
 Praat listings/voice-report export, more spectrogram/pitch/formant display options, live waveform.
 v0.6.0 bilingual HR/EN UI + server texts + English AI prompt, language selector.
 v0.7.0 browser edition (WebAssembly engine, in-page server, folder/IndexedDB storage, PWA, Cloudflare Pages).
-No auth yet in the desktop app (patient data + AI key on LAN!) — PIN/login is top priority in 0.8.
+v0.8.0 clinical workstation (Karton, SOAP sessions + protocols, GRBAS/CAPE-V, questionnaires, notes,
+voice profile/DSI), DigiLingua FILTER real-time mode + channel matrix, 8 new nodes incl. VU/sonagram
+monitors, free/local AI presets, MCP for Claude/ChatGPT.
+No auth yet in the desktop app (patient data + AI key on LAN!) — PIN/login is top priority in 0.9.
 The browser edition needs no login: everything stays on the user's device.
 Tags can't be pushed from Claude's cloud sessions (git proxy): Vedran pushes `vX.Y.Z` himself.
 
-## Next: v0.8.0
+## Next: v0.9.0
 0. PIN/login (patient data on LAN), optional per-clinic data dir.
 1. Verify CI green on all 3 targets; fix whatever breaks (Windows first).
 2. Windows ASIO (cpal `asio` feature; ASIO SDK in CI, check its license) + WASAPI exclusive option.
 3. Native duplex on Linux (JACK/PipeWire via cpal `jack` feature) to remove the input ring-buffer latency.
 4. Pisound support on RPi (button + MIDI), RT tuning check.
 5. State-preserving graph edits (reuse processors across Schedule rebuilds so delay tails don't reset).
-6. Multi-channel routing (beyond first 2 channels).
+6. Multi-device output (second output device for headphones with drift compensation); AVQI (LTAS slope/tilt, Praat-validated).
 7. DigiLingua: audit log of who changed patient data (with login), backup/restore of the data dir.
-Roadmap after: 0.9 LV2 hosting + plugin manager, 0.10 control-surface designer + MIDI learn/OSC,
-0.11 AI Lab (Faust), 0.12 RPi image, snapshots, DigiLingua exercise protocols.
+Roadmap after: 0.10 LV2 hosting + plugin manager, 0.11 control-surface designer + MIDI learn/OSC,
+0.12 AI Lab (Faust), 0.13 RPi image, snapshots.

@@ -3,7 +3,7 @@
 Real-time audio effects host for Linux, Windows and Raspberry Pi, controlled from any browser
 (desktop, tablet, phone). Inspired by MOD Desktop and Patchbox OS, rebuilt from scratch.
 
-**Status:** 0.7.0 — also runs **entirely in the browser**: <https://steroidsoundboard.geekranius.stream> (data stays on your computer); bilingual Croatian / English; professional DigiLingua workstation (light/dark), Praat-validated analysis page; Music + DigiLingua modes on one engine; Praat-validated voice analysis with a Praat-style editor, live sonagram, progress tracking and AI opinion for clinicians. See [CHANGELOG](CHANGELOG.md) and the roadmap below.
+**Status:** 0.8.0 — workstation for phoneticians and speech-language pathologists (patient chart, SOAP sessions, protocols, GRBAS/CAPE-V, DSI), DigiLingua FILTER with a sound-card channel matrix, AI assistants over **MCP** (Claude, ChatGPT); also runs **entirely in the browser**: <https://steroidsoundboard.geekranius.stream> (data stays on your computer); bilingual Croatian / English; professional DigiLingua workstation (light/dark), Praat-validated analysis page; Music + DigiLingua modes on one engine; Praat-validated voice analysis with a Praat-style editor, live sonagram, progress tracking and AI opinion for clinicians. See [CHANGELOG](CHANGELOG.md) and the roadmap below.
 
 ## Two modes, one engine
 
@@ -43,6 +43,49 @@ Open it directly with `http://<host>:8420/#digilingua`.
 
 > Patient data stays on the machine (`clinic.json`, `recordings/` in the data directory).
 > There is no login yet — in a clinic run with `--local` or on a trusted network.
+
+## For phoneticians and speech-language pathologists (DigiLingua)
+
+Tabs: **Karton** (patient chart) · **DigiLingua FILTER** (real-time auditory feedback) ·
+**Analiza** (recording and analysis) · **Napredak** (progress).
+
+- **Karton**: history, voice profile (MPT, s/z, F0 range, I-low, jitter, **DSI**), sessions with
+  SOAP, questionnaires (VHI-10…), perceptual ratings, notes, AI opinions, printable chart.
+- **Sessions**: start with a kind and a **protocol** (e.g. voice assessment: /a/ ×3, /s/, /z/,
+  glissando, softest phonation, reading, spontaneous speech) — a checklist where each task is
+  recorded with one click; SOAP, homework and next appointment in the sidebar.
+- **Analiza**: task instructions and a reading prompter, Praat-compatible measures, editor,
+  disfluency labels, **GRBAS / CAPE-V** rating, AI opinion.
+- **DigiLingua FILTER**: one switch for the real-time filter; sound card with **all channels**,
+  input and output **matrix** (e.g. the patient's headphones on outputs 3/4, the clinician's
+  monitor on 1/2), EQ, DAF, FAF, noise, interrupter, plus compressor, noise gate, hearing-
+  protection limiter, choral speech, metronome, notch — and **sonagram / VU meter monitors** at
+  any point of the chain.
+
+DSI needs a calibrated microphone (⚙ Settings → calibration) for the softest-phonation intensity.
+
+## AI assistants (MCP): Claude, ChatGPT
+
+The desktop app is an MCP server, so an assistant can look up a patient, read the chart, run
+the analysis on recordings, judge progress and save its assessment as a note in the chart.
+Enable it under DigiLingua ⚙ → **AI assistants (MCP)** (off by default; only patients with AI
+consent; pseudonymised unless you choose full details). The settings show ready-to-copy configs.
+
+- **Claude Desktop** (`claude_desktop_config.json`):
+  ```json
+  {"mcpServers": {"steroidsoundboard": {"command": "/path/to/steroidsoundboard", "args": ["--mcp"]}}}
+  ```
+  Add `"--data", "/path/to/folder"` when the data lives elsewhere (e.g. the browser edition's folder).
+- **Claude Code**: `claude mcp add steroidsoundboard -- /path/to/steroidsoundboard --mcp`
+- **ChatGPT / HTTP clients**: `http://<host>:8420/mcp` with `Authorization: Bearer <token>`
+  (or `?token=<token>`); ChatGPT needs a public HTTPS address, e.g. a Cloudflare Tunnel.
+
+Then ask, e.g. *"Napravi sveobuhvatnu procjenu pacijentice Ane Horvat i usporedi s prošlom
+kontrolom"* — or use the built-in prompts *procjena_pacijenta* / *napredak_terapije*.
+Patient data goes to the AI vendor your client uses: check GDPR and the patient's consent.
+
+**Free / local AI for the in-app AI opinion**: Ollama (built in), or presets for LM Studio, Jan,
+llama.cpp, OpenRouter free models, OpenCode Zen, Groq, Gemini (AI button → OpenAI-compatible → presets).
 
 ## Browser edition (no installation)
 
@@ -123,10 +166,11 @@ Linux `~/.local/share/SterOidSoundBoard`, Windows `%APPDATA%\SterOidSoundBoard`:
 - **0.5** ✅ DigiLingua-style professional UI, audio upload, saved analyses, Praat listings
 - **0.6** ✅ bilingual UI (HR / EN), English reports, exports and AI prompt
 - **0.7** ✅ browser edition (WebAssembly engine, local data folder or browser storage, PWA, Cloudflare Pages)
-- **0.8** PIN/login for the desktop app's LAN access, native duplex backends (JACK/PipeWire, ASIO), Pisound support, state-preserving graph edits
-- **0.9** LV2 plugin hosting + plugin manager (open-source plugin catalog)
-- **0.10** Control-surface designer (custom tablet layouts), MIDI learn, OSC
-- **0.11** AI Lab: describe an effect → Faust DSP generated, compiled (JIT) and loaded live
+- **0.8** ✅ clinical workstation (chart, SOAP sessions, protocols, GRBAS/CAPE-V, DSI), channel matrix, new filters and monitors, MCP for Claude/ChatGPT, free/local AI presets
+- **0.9** PIN/login for the desktop app's LAN access, native duplex backends (JACK/PipeWire, ASIO), Pisound support, state-preserving graph edits
+- **0.10** LV2 plugin hosting + plugin manager (open-source plugin catalog)
+- **0.11** Control-surface designer (custom tablet layouts), MIDI learn, OSC
+- **0.12** AI Lab: describe an effect → Faust DSP generated, compiled (JIT) and loaded live
   (Claude / OpenAI-compatible / Ollama, user's choice)
 - **1.0** Raspberry Pi image, snapshots, DigiLingua exercise protocols
 

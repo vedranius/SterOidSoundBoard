@@ -2,6 +2,57 @@
 
 All notable changes are documented here. Versioning: [SemVer](https://semver.org).
 
+## [0.8.0] - 2026-11-08
+
+DigiLingua becomes a workstation for **phoneticians and speech-language pathologists**: patient
+chart, structured sessions, assessment protocols, perceptual ratings, questionnaires, a voice
+profile with MPT, s/z and DSI, and **AI assistants (Claude, ChatGPT) connected over MCP**. The
+real-time page is now **DigiLingua FILTER**, with a full sound-card channel matrix and new filters.
+
+### Added
+- **Karton (patient chart)** tab: details and history, voice profile (MPT, s/z ratio, F0 range,
+  softest intensity, jitter, **Dysphonia Severity Index**), session timeline with SOAP, homework
+  and next appointment, questionnaires (VHI-10, VHI-30, V-RQOL, S-24, OASES…), perceptual ratings,
+  chart notes (also written by AI assistants), AI opinions, printable chart.
+- **Sessions**: kind (assessment / therapy / follow-up), **protocols** (voice assessment, voice
+  follow-up, fluency assessment, fluency therapy with the FILTER, motor speech) that fill a task
+  checklist; each task records with one click and is ticked when recorded; **SOAP** note,
+  homework, next appointment.
+- **Speech tasks** for the protocols (/s/, /z/, softest and loudest phonation, picture
+  description, diadochokinesis) with on-screen instructions and a full-screen **reading
+  prompter** ("Sjeverac i sunce" / "The North Wind and the Sun", counting, sentences).
+- **Perceptual rating** per recording: **GRBAS** (0–3) and **CAPE-V** (0–100), shown in the chart and in
+  the progress charts; progress also plots GRBAS G and CAPE-V.
+- **DigiLingua FILTER** (renamed from Real-time audio): one switch puts the filter on in real time
+  (off = the clean signal passes); **sound card channels and routing**: use every channel of a
+  multi-channel interface, input matrix (each input → filter L/R) and output matrix (filter L/R
+  and the dry microphone → each output, e.g. headphone outputs on channels 3/4), per-channel
+  meters, headphone outputs recognised by name; changes apply without restarting audio.
+- **New filters** (engine nodes, also on the pedalboard): compressor, noise gate, **limiter for
+  hearing protection**, **choral speech** (chorus), **metronome / pacer** for paced speech,
+  notch / hum filter (50/60 Hz and harmonics, feedback howl).
+- **Monitors anywhere in the chain**: **Sonagram** node (live spectrogram of that point) and
+  **VU meter** node (VU ballistics, peak hold, target zone for loudness training) — in the
+  DigiLingua FILTER page and on the pedalboard.
+- **MCP server** for AI assistants: `steroidsoundboard --mcp` (stdio, for Claude Desktop / Claude
+  Code; forwards to the running app) and `POST /mcp` (Streamable HTTP with a bearer token or
+  `?token=`, for ChatGPT and other clients). Tools: find patients, patient chart, voice profile,
+  acoustic analysis of a recording, progress, session, reference values, save a note to the chart;
+  prompts for a full assessment and a progress review. Off by default; only patients with AI
+  consent, pseudonymised by default (a patient can still be found by name); settings, token and
+  copy-paste configs under ⚙ Settings → AI assistants (MCP).
+- `--data DIR` chooses the data directory (e.g. the folder the browser edition uses).
+- **Free / local AI**: presets for LM Studio, Jan, llama.cpp, LocalAI/vLLM, Ollama (OpenAI API),
+  **OpenRouter** (free ":free" models), **OpenCode Zen**, Groq, Gemini, Mistral, OpenAI;
+  "⟳ Models" fetches the service's model list (free models first). Ollama stays built in.
+
+### Changed
+- Tabs: **Karton · DigiLingua FILTER · Analiza · Napredak**.
+- Translation: composed texts ("date · task · name", "task (n)") are translated piece by piece.
+
+### Fixed
+- Narrow screens: the page tabs scroll instead of widening the page.
+
 ## [0.7.0] - 2026-11-08
 
 **Browser edition** — the whole application also runs in a web browser, with nothing on a
