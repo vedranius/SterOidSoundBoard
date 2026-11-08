@@ -48,13 +48,27 @@ dictionary pair (or pattern). Server: `x-lang: en` header / `?lang=en` → task-
   spectrogram), `editor.js` Praat-style SoundEditor (+ inline `settingsForm`), `clinic.js` DigiLingua
   workstation laid out like the DigiLingua web app: clients list, pages Real-time / Analiza glasa /
   Napredak, session sidebar with history, analysis page (record/upload, saved analyses, exports).
+- `crates/clinic` (steroid-clinic): clinic data model (`clinic.rs`) + AI prompt (`prompt.rs`), pure Rust,
+  shared by the app and the WebAssembly build; `crates/app/src/clinic.rs` and `ai.rs` re-export it.
+- `crates/web` (steroid-web): WebAssembly module of the browser edition — C ABI with JSON calls
+  (`ssb_call`), WAV decode, live analyzer, DSP for the AudioWorklet (`dsp_*`); no wasm-bindgen.
+  `web/engine.js` wraps it. `web/local/`: `server.js` = every `/api` route + `/ws` events of
+  server.rs/state.rs re-implemented in the page (keep them in step when routes change!),
+  `store.js` folder (File System Access) or IndexedDB storage with the desktop data-dir layout,
+  `audio.js` + `worklet.js` Web Audio I/O, `analysis-worker.js`, `ai.js` (port of ai.rs/ollama.rs),
+  `boot.js` (fetch/WebSocket interception, storage chooser, Data panel, PWA, one-tab lock),
+  `sw.js`/`manifest.webmanifest`/`_headers` (CSP). `tools/build-web.sh` → dist/ (injects scripts
+  into index.html). Deployed to Cloudflare Pages project `steroidsoundboard` →
+  https://steroidsoundboard.geekranius.stream (CI job `web` deploys from main when the
+  CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID secrets exist). `tools/check-wasm.js` = wasm vs native.
 - `packaging/linux/` systemd unit + RPi install script. `.github/workflows/build.yml` CI + releases on `v*` tags.
 
 ## Conventions
 - SemVer. On every release: bump `VERSION` and `[workspace.package].version` in `Cargo.toml`,
   add a `## [x.y.z] - date` section to `CHANGELOG.md` (CI extracts it as release notes), commit, annotated tag `vX.Y.Z`, push main + tag.
 - After each update give Vedran a summary + current version.
-- `cargo test -p steroid-engine --lib` must pass; zero compiler warnings.
+- `cargo test -p steroid-engine --lib` must pass; zero compiler warnings (native and wasm32 builds).
+- Every UI change must work in both editions; test the browser edition with `tools/build-web.sh`.
 - Every DSP node output goes through NaN/inf guard; output is hard-clamped to 0 dBFS.
 
 ## Status
@@ -70,10 +84,12 @@ v0.4.1 Ollama built in (model manager, pull with progress, GPU/CPU share), live 
 v0.5.0 DigiLingua-style professional UI (light default), analysis page, audio upload, saved analyses,
 Praat listings/voice-report export, more spectrogram/pitch/formant display options, live waveform.
 v0.6.0 bilingual HR/EN UI + server texts + English AI prompt, language selector.
-No auth yet (patient data + AI key on LAN!) — PIN/login is top priority in 0.7.
+v0.7.0 browser edition (WebAssembly engine, in-page server, folder/IndexedDB storage, PWA, Cloudflare Pages).
+No auth yet in the desktop app (patient data + AI key on LAN!) — PIN/login is top priority in 0.8.
+The browser edition needs no login: everything stays on the user's device.
 Tags can't be pushed from Claude's cloud sessions (git proxy): Vedran pushes `vX.Y.Z` himself.
 
-## Next: v0.7.0
+## Next: v0.8.0
 0. PIN/login (patient data on LAN), optional per-clinic data dir.
 1. Verify CI green on all 3 targets; fix whatever breaks (Windows first).
 2. Windows ASIO (cpal `asio` feature; ASIO SDK in CI, check its license) + WASAPI exclusive option.
@@ -82,5 +98,5 @@ Tags can't be pushed from Claude's cloud sessions (git proxy): Vedran pushes `vX
 5. State-preserving graph edits (reuse processors across Schedule rebuilds so delay tails don't reset).
 6. Multi-channel routing (beyond first 2 channels).
 7. DigiLingua: audit log of who changed patient data (with login), backup/restore of the data dir.
-Roadmap after: 0.8 LV2 hosting + plugin manager, 0.9 control-surface designer + MIDI learn/OSC,
-0.10 AI Lab (Faust), 0.11 RPi image, snapshots, DigiLingua exercise protocols.
+Roadmap after: 0.9 LV2 hosting + plugin manager, 0.10 control-surface designer + MIDI learn/OSC,
+0.11 AI Lab (Faust), 0.12 RPi image, snapshots, DigiLingua exercise protocols.

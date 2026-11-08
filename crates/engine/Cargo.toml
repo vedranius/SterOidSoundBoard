@@ -4,9 +4,14 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+# Native audio I/O (cpal) and the recorder thread; off for the WebAssembly build.
+default = ["native"]
+native = ["dep:cpal", "dep:rtrb"]
+
 [dependencies]
-cpal = "0.15"
-rtrb = "0.3"
+cpal = { version = "0.15", optional = true }
+rtrb = { version = "0.3", optional = true }
 hound = "3.5"
 serde = { version = "1", features = ["derive"] }
 anyhow = "1"

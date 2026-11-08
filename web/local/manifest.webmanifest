@@ -1,0 +1,19 @@
+{
+  "name": "SterOidSoundBoard",
+  "short_name": "SterOid",
+  "description": "Voice and speech analysis (Praat-compatible) and auditory feedback for speech therapy — DigiLingua. Runs entirely in the browser; data stays on your computer.",
+  "lang": "hr",
+  "start_url": "/",
+  "scope": "/",
+  "id": "/",
+  "display": "standalone",
+  "display_override": ["window-controls-overlay", "standalone"],
+  "background_color": "#f3f5f8",
+  "theme_color": "#1c5da8",
+  "categories": ["medical", "health", "music", "education"],
+  "icons": [
+    { "src": "local/icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "local/icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "local/icons/maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

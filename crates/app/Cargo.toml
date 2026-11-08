@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 steroid-engine = { path = "../engine" }
+steroid-clinic = { path = "../clinic" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "signal", "fs"] }
 axum = { version = "0.8", features = ["ws"] }
 futures-util = "0.3"

@@ -52,7 +52,8 @@ impl AnalysisSettings {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
 pub struct VoiceReport {
     pub settings: AnalysisSettings,
     pub duration: f32,

@@ -94,6 +94,17 @@ different rounding.
    and `tools/praat_compare.praat` on each file and prints both values and the
    difference; `<` marks ≥ 2 %, `<<<` ≥ 10 %.
 
+The browser edition runs the same code compiled to WebAssembly. Its results are
+compared with the native build (CI does this on every push):
+```
+cargo build --release -p steroid-web --target wasm32-unknown-unknown
+cargo build --release -p steroid-web --example analyze
+node tools/check-wasm.js val/*.wav
+```
+Only the math library differs (Rust's `libm` in WebAssembly, the system's natively);
+the largest relative difference on the test signals is 2.4·10⁻⁷, far below the
+displayed precision.
+
 Any WAV file works, including your own recordings: exported recordings
 (`⬇ WAV` in the analysis view) can be compared directly.
 

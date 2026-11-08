@@ -1123,7 +1123,7 @@ $("#anPrint").onclick = () => {
     .hd{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:2px solid #111;padding-bottom:6px}.sig{margin-top:40px;display:flex;justify-content:space-between}
     .sig div{border-top:1px solid #111;width:40%;padding-top:4px;text-align:center}.ai{background:#f7f7f7;padding:8px;border-left:3px solid #4da3ff}
     @media print{body{margin:0}.noprint{display:none}}</style></head><body>
-    <div class="noprint" style="margin-bottom:10px"><button onclick="print()">Ispis / spremi kao PDF</button></div>
+    <div class="noprint" style="margin-bottom:10px"><button>Ispis / spremi kao PDF</button></div>
     <div class="hd"><div><h1>Akustička analiza glasa i govora</h1><div class="dim">${esc(S.clinic_name || "")}</div></div><div class="dim">Ispisano ${esc(fmtTime(Date.now()))}</div></div>
     <h2>Pacijent</h2><table class="pt">${p ? kv("Ime i prezime", p.name) + kv("Šifra / MBO", p.code) + kv("Datum rođenja", p.birth ? p.birth.split("-").reverse().join(".") + "." + (age != null ? ` (${yrs(age)})` : "") : "") + kv("Spol", p.sex) + kv("Dijagnoza", p.diagnosis) + kv("Razlog dolaska", p.complaint) : kv("Pacijent", "—")}</table>
     <h2>Snimka</h2><table class="pt">${kv("Zadatak", an.rec.task) + kv("Oznaka", an.rec.label) + kv("Datum snimanja", fmtTime(an.rec.created)) + kv("Izvor", an.rec.source === "out" ? "obrađeni izlaz" : "suhi mikrofon") +
@@ -1137,8 +1137,11 @@ $("#anPrint").onclick = () => {
     ${an.ai ? `<h2>AI mišljenje — pomoć rehabilitatoru, nije dijagnoza</h2><div class="dim">${esc(an.ai.model)} · ${esc(fmtTime(an.ai.created))}</div><div class="ai"><pre>${esc(an.ai.text)}</pre></div>` : ""}
     <div class="sig"><div>Datum</div><div>${esc(S.clinician || "Rehabilitator / logoped")}</div></div>
     <p class="dim" style="font-size:8pt;margin-top:20px">SterOidSoundBoard ${esc($("#ver").textContent)} · DigiLingua. Mjere su izračunate Praat-kompatibilnim algoritmima. Nalaz je pomoćno sredstvo i ne zamjenjuje kliničku procjenu.</p>
-    <script>window.onload=()=>setTimeout(()=>print(),300)<\/script></body></html>`);
+    </body></html>`);
   w.document.close(); I18N.apply(w.document.body); w.document.title = t(w.document.title);
+  // handlers from here, not inline: the page's Content-Security-Policy also covers this window
+  w.document.querySelector(".noprint button").onclick = () => w.print();
+  setTimeout(() => w.print(), 300);
 };
 
 // ============================================================ progress (Napredak)
@@ -1340,7 +1343,9 @@ function aiState() {
 function aiRenderText() {
   if (!aiRun || aiRender) return;
   aiRender = requestAnimationFrame(() => {
-    aiRender = 0; if (!aiRun) return;
+    aiRender = 0;
+    // a frame queued before the task ended must not replace the saved opinion
+    if (!aiRun || (aiRun.finished && aiRun.status === "done")) return;
     const out = $("#anAiOut"), stick = out.getBoundingClientRect().bottom < window.innerHeight + 40;
     out.innerHTML = `<div class="dim small">${aiRun.status === "running" ? "AI piše…" : "Djelomičan odgovor (nije spremljen)"}</div><div class="md">${md(aiRun.text)}${aiRun.status === "running" ? '<span class="caret">▍</span>' : ""}</div>`;
     if (stick && aiRun.status === "running") out.lastElementChild.scrollIntoView({ block: "end" });

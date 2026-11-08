@@ -1,0 +1,14 @@
+/* Browser edition: storage chooser and the "Data" panel. */
+.ssb-boot{position:fixed;inset:0;z-index:100;background:rgba(16,24,40,.45);display:flex;align-items:center;justify-content:center;padding:16px;overflow:auto}
+.ssb-card{background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-lg);box-shadow:var(--shadow-lg);max-width:620px;width:100%;padding:22px 24px;display:flex;flex-direction:column;gap:12px}
+.ssb-card h2{margin:0;font-size:20px}
+.ssb-card p{margin:0}
+.ssb-logo{display:flex;align-items:center;gap:8px;font-weight:700;color:var(--acc)}
+.ssb-opts{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.ssb-opt{flex-direction:column;align-items:flex-start;text-align:left;gap:6px;padding:14px;white-space:normal;height:auto}
+.ssb-opt b{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.ssb-opt .small{color:var(--dim);font-weight:400}
+.ssb-foot{border-top:1px solid var(--line);padding-top:10px}
+.ssb-data-in{display:flex;flex-direction:column;gap:10px;max-width:900px}
+.ssb-data-in .wrap{flex-wrap:wrap}
+@media (max-width:620px){.ssb-opts{grid-template-columns:1fr}.ssb-card{padding:16px}}

@@ -2,7 +2,52 @@
 
 All notable changes are documented here. Versioning: [SemVer](https://semver.org).
 
-## [0.6.0] - 2026-09-28
+## [0.7.0] - 2026-11-08
+
+**Browser edition** — the whole application also runs in a web browser, with nothing on a
+server: <https://steroidsoundboard.geekranius.stream> (Cloudflare Pages serves only the app's
+files). Patient data, histories, recordings and analyses stay on the user's computer.
+
+### Added
+- **The engine in WebAssembly** (`crates/web`): the same Rust code as the desktop app runs in the
+  browser — Praat-compatible analysis (in a Web Worker), editor contours, live sonagram, the DSP
+  graph (DigiLingua chain, all nodes) in an AudioWorklet, TextGrid, disfluency summary, the AI
+  prompt and every validation rule. `tools/check-wasm.js` compares it with the native build on
+  WAV files (largest relative difference 2·10⁻⁷; uploaded files give identical values).
+- **In-page server** (`web/local/server.js`): every `/api` route and the `/ws` events of the
+  desktop server, so the UI is unchanged.
+- **Where the data lives is the user's choice** (asked on first start):
+  - *a folder on this computer* (Chrome/Edge, File System Access) — the same layout as the desktop
+    app's data directory (`clinic.json`, `recordings/*.wav`, …), so the folder can be on an
+    encrypted disk, in a backed-up location, or shared with the installed program;
+  - *this browser* (IndexedDB, persistent storage requested).
+  A **Data** panel shows the location and offers a backup (.zip), restore, and moving the data to
+  a folder or into the browser. Only one tab at a time may edit the data (Web Locks).
+- **Installable app (PWA)**: manifest, icons, service worker — works offline once opened;
+  "Install the app" in the start dialog and the Data panel.
+- **Audio in the browser**: microphone without echo cancellation / noise suppression / AGC,
+  input and output device choice, buffer size, mute, input/output taps, 24-bit stereo WAV
+  recording like the native recorder, live sonagram and meters.
+- **AI from the browser**: Claude (direct browser access; the key stays in the local store),
+  OpenAI-compatible services that allow browser calls, and a local **Ollama** started with
+  `OLLAMA_ORIGINS=https://steroidsoundboard.geekranius.stream`.
+- Strict security headers for the site (CSP without inline scripts, no third-party code,
+  `connect-src` limited to the app, HTTPS AI services and a local Ollama).
+- `tools/build-web.sh` builds the static site; CI builds and checks it, attaches
+  `steroidsoundboard-x.y.z-web.zip` to releases and deploys to Cloudflare Pages from `main`
+  (repository secrets `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`).
+
+### Changed
+- `steroid-engine` has a `native` feature (default) for cpal and the recorder thread; WAV loading
+  moved to `wav.rs`. The clinic model and the AI prompt moved into the shared crate
+  `steroid-clinic` (used by the desktop app and the WebAssembly build).
+- The printable report no longer uses inline scripts.
+
+### Fixed
+- AI opinion: when the answer arrived very quickly, a late redraw could show it as
+  "partial answer (not saved)" although it was saved.
+
+ - 2026-09-28
 
 The whole application is now **bilingual: Croatian and English**, with a language selector (HR / EN)
 in the header. The choice is remembered per browser; Croatian stays the default.

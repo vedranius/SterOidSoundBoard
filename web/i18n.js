@@ -313,7 +313,7 @@ const I18N = (() => {
     ["Postavke analize", "Analysis settings"], ["Kalibracija", "Calibration"], ["nije kalibrirano (intenzitet relativan)", "not calibrated (relative intensity)"], ["Opažanja rehabilitatora", "Clinician's observations"],
     ["Oscilogram, spektrogram i konture", "Oscillogram, spectrogram and contours"], ["Mjere", "Measures"], ["Netečnosti", "Disfluencies"], ["Ukupno oznaka", "Total labels"], ["Slogova", "Syllables"],
     ["Prosjek 3 najduža SLD", "Mean of the 3 longest SLD"], ["Po vrstama", "By kind"], ["Klinički nalaz (automatski)", "Clinical report (automatic)"], ["AI mišljenje — pomoć rehabilitatoru, nije dijagnoza", "AI opinion — an aid for the clinician, not a diagnosis"],
-    ["pacijent", "patient"], ["previše spremljenih analiza za ovu snimku", "too many saved analyses for this recording"], ["nema te analize", "no such analysis"],
+    ["pacijent", "patient"], ["· intenzitet", "· intensity"], ["previše spremljenih analiza za ovu snimku", "too many saved analyses for this recording"], ["nema te analize", "no such analysis"],
     ["naziv preseta je obavezan (do 120 znakova)", "a preset name is required (up to 120 characters)"], ["tvornički preseti se ne mogu brisati", "factory presets cannot be deleted"],
     ["pacijent nema zabilježenu suglasnost za AI analizu (Uredi pacijenta)", "the patient has no recorded consent for AI analysis (Edit patient)"], ["snimka je u međuvremenu obrisana", "the recording has been deleted in the meantime"],
     ["nema tog zadatka", "no such task"], ["ime je obavezno", "a name is required"], ["predugačak unos", "input too long"], ["previše oznaka", "too many labels"], ["neispravna oznaka", "invalid label"], ["snimka", "recording"], ["Datum", "Date"], ["Rehabilitator / logoped", "Clinician / speech therapist"], ["sesija", "session"], ["Nema snimaka za prikaz.", "No recordings to show."],
@@ -326,7 +326,7 @@ const I18N = (() => {
     [/^odsječak (.+) s · visina (.+) Hz( · CPPS se računa…)?$/, (m, a, b, c) => `selection ${a} s · pitch ${b} Hz` + (c ? " · computing CPPS…" : "")],
     [/^Algoritmi su port Praata .* prostoriji\.( \* .*)?$/, (m, a) => "The algorithms are a port of Praat (Boersma & Weenink), verified against Praat 7.0. The limits are indicative (MDVP/literature) and depend on the task, microphone and room." + (a || "")],
     [/^SterOidSoundBoard (.*) · DigiLingua\. Mjere su izračunate Praat-kompatibilnim algoritmima\. Nalaz je pomoćno sredstvo i ne zamjenjuje kliničku procjenu\.$/, "SterOidSoundBoard $1 · DigiLingua. The measures are computed with Praat-compatible algorithms. The report is an aid and does not replace clinical assessment."],
-    [/^Nalaz — (.+)$/, "Report — $1"], [/^([\d.,—-]+) slog\/s$/, "$1 syll/s"], [/^zadano \((.+)\)$/, (m, a) => `default (${a === "nema" ? "none" : a})`], [/^(.+) \((\d+) god\.\)$/, "$1 ($2 y)"],
+    [/^Nalaz — (.+)$/, "Report — $1"], [/^(\d+) okv\. \((.+) ms\)$/, "$1 frames ($2 ms)"], [/^([\d.,—-]+) slog\/s$/, "$1 syll/s"], [/^zadano \((.+)\)$/, (m, a) => `default (${a === "nema" ? "none" : a})`], [/^(.+) \((\d+) god\.\)$/, "$1 ($2 y)"],
   );
   const H2E = new Map(), E2H = new Map();
   for (const [h, e] of PAIRS) { if (!H2E.has(h)) H2E.set(h, e); if (!E2H.has(e)) E2H.set(e, h); }
