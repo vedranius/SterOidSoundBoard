@@ -60,7 +60,8 @@ dictionary pair (or pattern). Server: `x-lang: en` header / `?lang=en` → task-
   `sw.js`/`manifest.webmanifest`/`_headers` (CSP). `tools/build-web.sh` → dist/ (injects scripts
   into index.html). Deployed to Cloudflare Pages project `steroidsoundboard` →
   https://steroidsoundboard.geekranius.stream (CI job `web` deploys from main when the
-  CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID secrets exist). `tools/check-wasm.js` = wasm vs native.
+  CLOUDFLARE_API_TOKEN secret exists; direct upload from a cloud session fails because the proxy
+  replaces wrangler's upload JWT — deploy via CI). `tools/check-wasm.js` = wasm vs native.
 - `packaging/linux/` systemd unit + RPi install script. `.github/workflows/build.yml` CI + releases on `v*` tags.
 
 ## Conventions

@@ -91,13 +91,14 @@ jobs:
         with:
           name: steroidsoundboard-web
           path: dist/*.zip
-      # Needs the repository secrets CLOUDFLARE_API_TOKEN (Pages: Edit) and CLOUDFLARE_ACCOUNT_ID.
+      # Needs the repository secret CLOUDFLARE_API_TOKEN (Account → Cloudflare Pages: Edit).
+      # The account id is not a secret (it is part of every dashboard URL).
       - name: Deploy to Cloudflare Pages (steroidsoundboard.geekranius.stream)
         if: github.event_name == 'push' && github.ref == 'refs/heads/main' && env.CF_TOKEN != ''
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          accountId: 37be952dfe8d74601e1af8bad125debb
           command: pages deploy dist/web --project-name=steroidsoundboard --branch=main --commit-dirty=true
 
   release:

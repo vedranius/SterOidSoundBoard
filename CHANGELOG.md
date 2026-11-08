@@ -35,7 +35,7 @@ files). Patient data, histories, recordings and analyses stay on the user's comp
   `connect-src` limited to the app, HTTPS AI services and a local Ollama).
 - `tools/build-web.sh` builds the static site; CI builds and checks it, attaches
   `steroidsoundboard-x.y.z-web.zip` to releases and deploys to Cloudflare Pages from `main`
-  (repository secrets `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`).
+  (repository secret `CLOUDFLARE_API_TOKEN`).
 
 ### Changed
 - `steroid-engine` has a `native` feature (default) for cpal and the recorder thread; WAV loading
