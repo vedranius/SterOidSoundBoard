@@ -3,11 +3,11 @@
 Real-time audio effects host for Linux, Windows and Raspberry Pi, controlled from any browser
 (desktop, tablet, phone). Inspired by MOD Desktop and Patchbox OS, rebuilt from scratch.
 
-**Status:** 0.8.0 — workstation for phoneticians and speech-language pathologists (patient chart, SOAP sessions, protocols, GRBAS/CAPE-V, DSI), DigiLingua FILTER with a sound-card channel matrix, AI assistants over **MCP** (Claude, ChatGPT); also runs **entirely in the browser**: <https://steroidsoundboard.geekranius.stream> (data stays on your computer); bilingual Croatian / English; professional DigiLingua workstation (light/dark), Praat-validated analysis page; Music + DigiLingua modes on one engine; Praat-validated voice analysis with a Praat-style editor, live sonagram, progress tracking and AI opinion for clinicians. See [CHANGELOG](CHANGELOG.md) and the roadmap below.
+**Status:** 0.8.2 — workstation for phoneticians and speech-language pathologists (patient chart, SOAP sessions, protocols, GRBAS/CAPE-V, DSI), DigiLingua FILTER with a sound-card channel matrix, AI assistants over **MCP** (Claude, ChatGPT); also runs **entirely in the browser**: <https://steroidsoundboard.geekranius.stream> (data stays on your computer); bilingual Croatian / English; professional DigiLingua workstation (light/dark), Praat-validated analysis page; Music + DigiLingua modes on one engine; Praat-validated voice analysis with a Praat-style editor, live sonagram, progress tracking and AI opinion for clinicians. See [CHANGELOG](CHANGELOG.md) and the roadmap below.
 
 ## Two modes, one engine
 
-| | **Music** | **DigiLingua** |
+| | **DigiLingua** (header button; was "Music") | **Analiza glasa** / Voice analysis (header button; was "DigiLingua") |
 |---|---|---|
 | For | musicians, live effects | speech/voice therapists (rehabilitacija govora i glasa) |
 | View | pedalboard: drag nodes and cables | clinical panel: patient, session, EQ, DAF/FAF, noise, analysis |
@@ -39,22 +39,23 @@ observations and optionally the sonagram image — never the audio. It needs the
 consent. A live log shows what it is doing (model loading, GPU/CPU use, tokens/s) and the answer
 appears as it is written. Configure it with the **AI** button in the header.
 
-Open it directly with `http://<host>:8420/#digilingua`.
+The app opens in **Analiza glasa** by default and then remembers the last choice;
+`http://<host>:8420/#analiza` (or the old `#digilingua`) and `#music` open a mode directly.
 
 > Patient data stays on the machine (`clinic.json`, `recordings/` in the data directory).
 > There is no login yet — in a clinic run with `--local` or on a trusted network.
 
-## For phoneticians and speech-language pathologists (DigiLingua)
+## For phoneticians and speech-language pathologists (Analiza glasa)
 
 Tabs: **Karton** (patient chart) · **DigiLingua FILTER** (real-time auditory feedback) ·
-**Analiza** (recording and analysis) · **Napredak** (progress).
+**Snimanje i mjerenja** (recording and analysis) · **Napredak** (progress).
 
 - **Karton**: history, voice profile (MPT, s/z, F0 range, I-low, jitter, **DSI**), sessions with
   SOAP, questionnaires (VHI-10…), perceptual ratings, notes, AI opinions, printable chart.
 - **Sessions**: start with a kind and a **protocol** (e.g. voice assessment: /a/ ×3, /s/, /z/,
   glissando, softest phonation, reading, spontaneous speech) — a checklist where each task is
   recorded with one click; SOAP, homework and next appointment in the sidebar.
-- **Analiza**: task instructions and a reading prompter, Praat-compatible measures, editor,
+- **Snimanje i mjerenja**: task instructions and a reading prompter, Praat-compatible measures, editor,
   disfluency labels, **GRBAS / CAPE-V** rating, AI opinion.
 - **DigiLingua FILTER**: one switch for the real-time filter; sound card with **all channels**,
   input and output **matrix** (e.g. the patient's headphones on outputs 3/4, the clinician's

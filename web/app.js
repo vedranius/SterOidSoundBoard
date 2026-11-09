@@ -322,8 +322,9 @@ setTheme((() => { try { return localStorage.getItem("ssb.theme") || "light"; } c
   showMute(st.mute);
   buildPalette();
   let mode = "music";
-  try { mode = localStorage.getItem("ssb.mode") || (location.hash === "#digilingua" ? "clinic" : "music"); } catch (_) {}
-  if (location.hash === "#digilingua") mode = "clinic";
+  try { mode = localStorage.getItem("ssb.mode") || "clinic"; } catch (_) { mode = "clinic"; }
+  if (location.hash === "#digilingua" || location.hash === "#analiza") mode = "clinic";
+  if (location.hash === "#music") mode = "music";
   setMode(mode === "clinic" ? "clinic" : "music");
   connectWs();
 })();

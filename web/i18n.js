@@ -317,7 +317,7 @@ const I18N = (() => {
     ["Anamneza, glasovni profil, sesije, upitnici, bilješke i AI mišljenja", "History, voice profile, sessions, questionnaires, notes and AI opinions"],
     ["Slušna povratna veza u stvarnom vremenu: zvučna kartica, kanali, EQ, DAF, FAF, šum, filtri i monitori", "Real-time auditory feedback: sound card, channels, EQ, DAF, FAF, noise, filters and monitors"],
     ["Snimanje, spektrogram, visina, formanti, akustička analiza (Praat) i perceptivna ocjena", "Recording, spectrogram, pitch, formants, acoustic analysis (Praat) and perceptual rating"],
-    ["Analiza", "Analysis"], ["Perceptivna ocjena", "Perceptual rating"], ["DigiLingua FILTER", "DigiLingua FILTER"],
+    ["Analiza", "Analysis"], ["Snimanje i mjerenja", "Recording & measures"], ["tabovi DigiLingua FILTER / Snimanje i mjerenja / Napredak", "pages DigiLingua FILTER / Recording & measures / Progress"], ["Perceptivna ocjena", "Perceptual rating"], ["DigiLingua FILTER", "DigiLingua FILTER"],
     ["Produženi /s/", "Sustained /s/"], ["Produženi /z/", "Sustained /z/"], ["Najtiša fonacija /a/", "Softest phonation /a/"], ["Najglasnija fonacija /a/", "Loudest phonation /a/"],
     ["Opis slike", "Picture description"], ["Dijadohokineza (pa-ta-ka)", "Diadochokinesis (pa-ta-ka)"],
     ["↑ glasnije", "↑ louder"], ["↓ tiše", "↓ softer"], ["✓ u cilju", "✓ on target"], ["Ž", "F"], ["drugo", "other"],

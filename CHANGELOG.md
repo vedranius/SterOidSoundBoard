@@ -2,6 +2,18 @@
 
 All notable changes are documented here. Versioning: [SemVer](https://semver.org).
 
+## [0.8.2] - 2026-11-09
+
+### Changed
+- Header mode buttons renamed: the pedalboard is now **DigiLingua** (was "Music") and the
+  clinical workstation is **Analiza glasa** / Voice analysis (was "DigiLingua").
+- The workstation tab "Analiza" is now **Snimanje i mjerenja** / Recording & measures, so the
+  word is not repeated; keyboard-shortcut help updated.
+- The app opens in **Analiza glasa** when no mode was chosen before (the last choice is still
+  remembered); `#analiza`, `#digilingua` and `#music` open a mode directly.
+- The top bar stays on one line from 1280 px up (DSP load, xruns and the version label are
+  hidden between 1101 and 1439 px).
+
 ## [0.8.1] - 2026-11-09
 
 ### Fixed

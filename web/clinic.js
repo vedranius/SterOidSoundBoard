@@ -302,7 +302,7 @@ function renderRecTable() {
 const PAGES = {
   karton: ["user", "Karton pacijenta", "Anamneza, glasovni profil, sesije, upitnici, bilješke i AI mišljenja"],
   rehab: ["sliders", "DigiLingua FILTER", "Slušna povratna veza u stvarnom vremenu: zvučna kartica, kanali, EQ, DAF, FAF, šum, filtri i monitori"],
-  analiza: ["activity", "Analiza", "Snimanje, spektrogram, visina, formanti, akustička analiza (Praat) i perceptivna ocjena"],
+  analiza: ["activity", "Snimanje i mjerenja", "Snimanje, spektrogram, visina, formanti, akustička analiza (Praat) i perceptivna ocjena"],
   napredak: ["trending", "Napredak", "Mjere kroz vrijeme i usporedba snimaka"],
 };
 function setTab(t) {

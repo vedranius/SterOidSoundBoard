@@ -47,7 +47,7 @@ dictionary pair (or pattern). Server: `x-lang: en` header / `?lang=en` → task-
   setBypass shared by views, light/dark theme), `icons.js` inline icon set (`data-ic`), `sono.js`
   colour maps/axes/legend + theme palette (`Sono.pal()` from CSS `--cv-*`) + LiveSono (live wave +
   spectrogram), `editor.js` Praat-style SoundEditor (+ inline `settingsForm`), `clinic.js` DigiLingua
-  workstation laid out like the DigiLingua web app: clients list, pages Real-time / Analiza glasa /
+  workstation laid out like the DigiLingua web app: clients list, pages Real-time / Snimanje i mjerenja /
   Napredak, session sidebar with history, analysis page (record/upload, saved analyses, exports).
 - `crates/clinic` (steroid-clinic): clinic data model (`clinic.rs`) + AI prompt (`prompt.rs`), pure Rust,
   shared by the app and the WebAssembly build; `crates/app/src/clinic.rs` and `ai.rs` re-export it.

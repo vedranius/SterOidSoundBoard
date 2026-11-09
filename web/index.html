@@ -10,13 +10,13 @@
 <header>
   <strong class="logo"><span class="logo-mark" data-ic="waves"></span>SterOidSoundBoard</strong><span id="ver" class="dim small"></span>
   <div id="modes" class="seg">
-    <button data-mode="music" class="sel"><span data-ic="music"></span>Music</button><button data-mode="clinic"><span data-ic="activity"></span>DigiLingua</button>
+    <button data-mode="music" class="sel"><span data-ic="music"></span>DigiLingua</button><button data-mode="clinic"><span data-ic="activity"></span>Analiza glasa</button>
   </div>
   <div id="status" class="status">audio: —</div>
   <div class="meters-top">
     <span class="dim">IN</span><div class="m"><i id="mInL"></i></div><div class="m"><i id="mInR"></i></div>
     <span class="dim">OUT</span><div class="m"><i id="mOutL"></i></div><div class="m"><i id="mOutR"></i></div>
-    <span class="dim">DSP</span><span id="load">0%</span><span class="dim">xruns</span><span id="xruns">0</span>
+    <span class="dim xr">DSP</span><span id="load" class="xr">0%</span><span class="dim xr">xruns</span><span id="xruns" class="xr">0</span>
   </div>
   <button id="btnMute" title="Silence the output (meters and recording keep working)">Mute</button>
   <button id="btnPresets"><span data-ic="bookmark"></span>Presets</button>
@@ -100,7 +100,7 @@
       <button class="client-chip" id="clChip" title="Odaberi klijenta"><span class="avatar" id="clChipAv">?</span><span id="clChipName">odaberite klijenta</span></button>
       <span id="clPresetBadge" class="badge hidden" title="Trenutni klinički preset"></span>
       <span class="grow"></span>
-      <nav class="seg tabs" id="clTabs"><button data-tab="karton"><span data-ic="user"></span>Karton</button><button data-tab="rehab" class="sel"><span data-ic="sliders"></span>DigiLingua FILTER</button><button data-tab="analiza"><span data-ic="activity"></span>Analiza</button><button data-tab="napredak"><span data-ic="trending"></span>Napredak</button></nav>
+      <nav class="seg tabs" id="clTabs"><button data-tab="karton"><span data-ic="user"></span>Karton</button><button data-tab="rehab" class="sel"><span data-ic="sliders"></span>DigiLingua FILTER</button><button data-tab="analiza"><span data-ic="activity"></span>Snimanje i mjerenja</button><button data-tab="napredak"><span data-ic="trending"></span>Napredak</button></nav>
       <button id="clHelpBtn" class="icon" title="Tipkovnički prečaci (?)"><span data-ic="keyboard"></span></button>
       <button id="clSettingsBtn" class="icon" title="Postavke ustanove, analize i kalibracije"><span data-ic="settings"></span></button>
       <button id="clAudioBtn" class="pri" title="Pokreni / zaustavi zvuk (razmaknica)">▶ Pokreni audio</button>
@@ -373,7 +373,7 @@
       <tr><td><kbd>R</kbd></td><td>reset EQ na 0 dB</td></tr>
       <tr><td><kbd>D</kbd></td><td>osvježi popis audio uređaja</td></tr>
       <tr><td><kbd>M</kbd></td><td>utišaj / uključi izlaz</td></tr>
-      <tr><td><kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd></td><td>tabovi Rehabilitacija / Analiza glasa / Napredak</td></tr>
+      <tr><td><kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd></td><td>tabovi DigiLingua FILTER / Snimanje i mjerenja / Napredak</td></tr>
       <tr><td><kbd>/</kbd></td><td>traži pacijenta</td></tr>
       <tr><td><kbd>Esc</kbd></td><td>zatvori prozor</td></tr>
       <tr><td colspan="2" class="dim">Editor analize: <kbd>+</kbd>/<kbd>−</kbd> zum, <kbd>←</kbd>/<kbd>→</kbd> pomak, <kbd>A</kbd> nova oznaka, <kbd>Delete</kbd> briše odabranu oznaku.</td></tr>

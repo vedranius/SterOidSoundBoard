@@ -473,3 +473,10 @@ pre.code{background:var(--well);color:var(--well-fg);padding:8px 10px;border-rad
 #clTabs::-webkit-scrollbar{display:none}
 #clTabs button{flex:none}
 @media (max-width:620px){#clTabs button{padding:6px 8px}#clTabs button .ic{display:none}}
+/* Medium widths (laptops): keep the top bar on one line. The DSP load and xruns
+   counters and the version label are hidden there (they stay visible on wide screens). */
+@media (min-width:1101px) and (max-width:1439px){
+  header{gap:7px;padding:8px 10px}
+  header .meters-top .xr,header #ver{display:none}
+  header button{padding-left:9px;padding-right:9px}
+}
