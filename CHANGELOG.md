@@ -2,6 +2,15 @@
 
 All notable changes are documented here. Versioning: [SemVer](https://semver.org).
 
+## [0.8.1] - 2026-11-09
+
+### Fixed
+- Browser edition: the service worker never answers with an empty response any more.
+  When a file was not cached and the network request failed (for example right after the
+  custom domain was re-attached), browsers showed a bare `ERR_FAILED` page; now they get
+  the cached app or a short "offline" message, and the page loads normally once the
+  network is back.
+
 ## [0.8.0] - 2026-11-08
 
 DigiLingua becomes a workstation for **phoneticians and speech-language pathologists**: patient

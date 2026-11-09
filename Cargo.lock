@@ -1942,7 +1942,7 @@ checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 
 [[package]]
 name = "steroid-clinic"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "anyhow",
  "serde",
@@ -1952,7 +1952,7 @@ dependencies = [
 
 [[package]]
 name = "steroid-engine"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "anyhow",
  "cpal",
@@ -1964,7 +1964,7 @@ dependencies = [
 
 [[package]]
 name = "steroid-web"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "hound",
  "serde",
@@ -1975,7 +1975,7 @@ dependencies = [
 
 [[package]]
 name = "steroidsoundboard"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "anyhow",
  "axum",
