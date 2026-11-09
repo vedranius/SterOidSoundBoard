@@ -2,6 +2,34 @@
 
 All notable changes are documented here. Versioning: [SemVer](https://semver.org).
 
+## [0.9.0] - 2026-11-09
+
+### Added
+- **Sign-in for the desktop app.** Users with a password or PIN (Argon2id hashes in
+  `users.json`), roles *administrator* and *clinician*, cookie sessions (HttpOnly,
+  SameSite=Strict; 12 h idle, 7 days at most), a brake on wrong guesses per address
+  (30 s after 5 tries, doubling up to 15 min). Login screen, header button and a panel for
+  users, own password change and sign-out (HR / EN, phone width).
+- Until the first user exists, patient data, AI/MCP settings and backups are only reachable
+  on the computer the app runs on; other devices get the audio part and the pedalboard, and
+  their WebSocket carries no clinical events.
+- **Change log** (`audit.jsonl`, viewer for administrators): changes to patient data with
+  user, address and time, sign-ins and failed sign-ins, backups, restores, user changes and
+  notes written by AI assistants over MCP. Ids only, no patient names or content.
+- **Backup / restore** in the desktop app: one `.zip` (stored entries, the browser edition's
+  format, so backups move between the editions). Passwords, AI key and MCP token are never
+  included; a restore first saves the current data to `backups/before-restore-<time>.zip`
+  and only writes data files (no `..`, no settings).
+
+### Security
+- Requests from other websites (cross-site `Origin`) and unknown host names (DNS rebinding)
+  are refused; `SSB_ALLOW_HOSTS` allows extra names (reverse proxy).
+- Changing the AI provider, MCP settings, users, the change log and backups need an
+  administrator.
+
+### Changed
+- The page starts in the clinical colours before the app has loaded (no orange flash).
+
 ## [0.8.2] - 2026-11-09
 
 ### Changed

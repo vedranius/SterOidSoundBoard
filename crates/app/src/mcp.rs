@@ -331,7 +331,9 @@ fn call_tool(app: &App, name: &str, a: &Value, client: &str) -> anyhow::Result<V
             }
             let pid = s("patient_id");
             patient_ok(&pid)?;
-            let n = app.add_note(&pid, &s("title"), &s("text"), &format!("mcp:{}", client.chars().take(60).collect::<String>()))?;
+            let who = format!("mcp:{}", client.chars().take(60).collect::<String>());
+            let n = app.add_note(&pid, &s("title"), &s("text"), &who)?;
+            app.auth.audit(&who, "mcp", "POST", &format!("/api/patients/{pid}/notes"));
             Ok(json!({"saved": true, "note_id": n.id, "created": n.created}))
         }
         _ => anyhow::bail!("unknown tool {name}"),

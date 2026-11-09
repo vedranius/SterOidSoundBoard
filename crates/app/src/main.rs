@@ -2,6 +2,8 @@
 #[macro_use]
 mod i18n;
 mod ai;
+mod auth;
+mod backup;
 mod clinic;
 mod mcp;
 mod ollama;
@@ -103,7 +105,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let app_shutdown = app.clone();
-    axum::serve(listener, server::router(app))
+    axum::serve(listener, server::router(app).into_make_service_with_connect_info::<SocketAddr>())
         .with_graceful_shutdown(async move {
             shutdown_signal().await;
             log::info!("shutting down");

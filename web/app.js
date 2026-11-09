@@ -9,7 +9,12 @@ const emitHooks = (m) => HOOKS.forEach((f) => { try { f(m); } catch (e) { consol
 // ---------------------------------------------------------------- helpers
 async function api(method, path, body) {
   const r = await fetch(path, { method, headers: { "Content-Type": "application/json", "x-lang": I18N.lang }, body: body ? JSON.stringify(body) : undefined });
-  if (!r.ok) { let m = r.statusText; try { m = (await r.json()).error || m; } catch (_) {} throw new Error(m); }
+  if (!r.ok) {
+    let m = r.statusText, j = null;
+    try { j = await r.json(); m = j.error || m; } catch (_) {}
+    if (r.status === 401 && j && j.login && window.Auth) Auth.showLogin(m); // the session ended
+    throw new Error(m);
+  }
   return r.status === 204 ? null : r.json();
 }
 function toast(msg) { const t = $("#toast"); t.textContent = I18N.t(String(msg)); t.classList.add("show"); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove("show"), 3000); }
@@ -315,6 +320,7 @@ setTheme((() => { try { return localStorage.getItem("ssb.theme") || "light"; } c
 
 // ---------------------------------------------------------------- boot
 (async () => {
+  await (window.AUTH_READY || null); // desktop app: signed in (or no login needed)
   (await api("GET", "/api/node-types")).forEach((t) => (TYPES[t.kind] = t));
   const st = await api("GET", "/api/status");
   $("#ver").textContent = "v" + st.version;

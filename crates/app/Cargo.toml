@@ -23,3 +23,9 @@ local-ip-address = "0.6"
 # AI providers: blocking HTTPS client with rustls (ring) — no OpenSSL/cmake needed on any target
 ureq = { version = "2", features = ["json", "tls", "proxy-from-env"] }
 base64 = "0.22"
+# Login: Argon2id password/PIN hashes, random session tokens (pure Rust, every target)
+argon2 = { version = "0.5", features = ["std"] }
+getrandom = "0.2"
+# Backup/restore of the data directory as a .zip (stored entries, same as the browser edition)
+zip = { version = "2", default-features = false }
+tokio-util = { version = "0.7", features = ["io"] }

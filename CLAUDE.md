@@ -94,18 +94,24 @@ v0.7.0 browser edition (WebAssembly engine, in-page server, folder/IndexedDB sto
 v0.8.0 clinical workstation (Karton, SOAP sessions + protocols, GRBAS/CAPE-V, questionnaires, notes,
 voice profile/DSI), DigiLingua FILTER real-time mode + channel matrix, 8 new nodes incl. VU/sonagram
 monitors, free/local AI presets, MCP for Claude/ChatGPT.
-No auth yet in the desktop app (patient data + AI key on LAN!) — PIN/login is top priority in 0.9.
+v0.8.2 modes renamed: pedalboard = "DigiLingua" (was Music), clinical workstation = "Analiza glasa"
+(was DigiLingua); its tab Analiza = "Snimanje i mjerenja". App opens in Analiza glasa.
+v0.9.0 desktop sign-in (`auth.rs`: users.json Argon2id, roles admin/clinician, cookie sessions,
+guess brake, audit.jsonl), `server.rs` `gate` middleware (no users: patient data only from
+loopback; Origin + Host checks; admin-only routes; audit of clinical mutations), `backup.rs`
+(stored .zip = browser edition format, safe restore), `web/auth.js` (login screen, users panel,
+change log, backup/restore; no-op in the browser edition).
 The browser edition needs no login: everything stays on the user's device.
 Tags can't be pushed from Claude's cloud sessions (git proxy): Vedran pushes `vX.Y.Z` himself.
 
-## Next: v0.9.0
-0. PIN/login (patient data on LAN), optional per-clinic data dir.
+## Next: v0.9.x
+0. Optional per-clinic data dir; sign out WebSocket clients when their session ends.
 1. Verify CI green on all 3 targets; fix whatever breaks (Windows first).
 2. Windows ASIO (cpal `asio` feature; ASIO SDK in CI, check its license) + WASAPI exclusive option.
 3. Native duplex on Linux (JACK/PipeWire via cpal `jack` feature) to remove the input ring-buffer latency.
 4. Pisound support on RPi (button + MIDI), RT tuning check.
 5. State-preserving graph edits (reuse processors across Schedule rebuilds so delay tails don't reset).
 6. Multi-device output (second output device for headphones with drift compensation); AVQI (LTAS slope/tilt, Praat-validated).
-7. DigiLingua: audit log of who changed patient data (with login), backup/restore of the data dir.
+7. Author of SOAP notes/ratings from the signed-in user; scheduled automatic backups.
 Roadmap after: 0.10 LV2 hosting + plugin manager, 0.11 control-surface designer + MIDI learn/OSC,
 0.12 AI Lab (Faust), 0.13 RPi image, snapshots.

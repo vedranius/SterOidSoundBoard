@@ -3,7 +3,7 @@
 Real-time audio effects host for Linux, Windows and Raspberry Pi, controlled from any browser
 (desktop, tablet, phone). Inspired by MOD Desktop and Patchbox OS, rebuilt from scratch.
 
-**Status:** 0.8.2 — workstation for phoneticians and speech-language pathologists (patient chart, SOAP sessions, protocols, GRBAS/CAPE-V, DSI), DigiLingua FILTER with a sound-card channel matrix, AI assistants over **MCP** (Claude, ChatGPT); also runs **entirely in the browser**: <https://steroidsoundboard.geekranius.stream> (data stays on your computer); bilingual Croatian / English; professional DigiLingua workstation (light/dark), Praat-validated analysis page; Music + DigiLingua modes on one engine; Praat-validated voice analysis with a Praat-style editor, live sonagram, progress tracking and AI opinion for clinicians. See [CHANGELOG](CHANGELOG.md) and the roadmap below.
+**Status:** 0.9.0 — sign-in, roles, change log and backups for the desktop app; workstation for phoneticians and speech-language pathologists (patient chart, SOAP sessions, protocols, GRBAS/CAPE-V, DSI), DigiLingua FILTER with a sound-card channel matrix, AI assistants over **MCP** (Claude, ChatGPT); also runs **entirely in the browser**: <https://steroidsoundboard.geekranius.stream> (data stays on your computer); bilingual Croatian / English; professional DigiLingua workstation (light/dark), Praat-validated analysis page; Music + DigiLingua modes on one engine; Praat-validated voice analysis with a Praat-style editor, live sonagram, progress tracking and AI opinion for clinicians. See [CHANGELOG](CHANGELOG.md) and the roadmap below.
 
 ## Two modes, one engine
 
@@ -43,7 +43,31 @@ The app opens in **Analiza glasa** by default and then remembers the last choice
 `http://<host>:8420/#analiza` (or the old `#digilingua`) and `#music` open a mode directly.
 
 > Patient data stays on the machine (`clinic.json`, `recordings/` in the data directory).
-> There is no login yet — in a clinic run with `--local` or on a trusted network.
+
+## Sign-in, users, change log and backups (desktop app)
+
+- **Until the first user exists**, patient data, AI/MCP settings and backups are only reachable on
+  the computer the app runs on (`127.0.0.1`). Tablets and phones on the network still get the audio
+  part and the pedalboard, but no patient data and no clinical live events.
+- **Switch on sign-in** on that computer: header button **Prijava / Sign-in** → create the first user
+  (always an administrator; password or PIN, at least 4 characters). From then on every device,
+  this computer included, signs in. Sessions are cookies (HttpOnly, SameSite=Strict) that end
+  after 12 h without use or 7 days at the latest; after 5 wrong guesses an address waits 30 s,
+  doubling up to 15 min. Passwords are stored as Argon2id hashes in `users.json`.
+- **Roles:** *administrator* (users, change log, backup/restore, AI and MCP settings) and
+  *clinician* (everything clinical). Administrators add users, set new passwords, disable or
+  delete users; everyone can change their own password (other devices are then signed out).
+- **Change log** (`audit.jsonl`): who changed patient data, from which address and when, plus
+  sign-ins, failed sign-ins, backups, restores and user changes — ids only, never patient names
+  or content. Notes written by an AI assistant over MCP appear as `mcp:<client>`.
+- **Backup / restore:** one `.zip` with charts, sessions, recordings, presets and the change log —
+  the same format as the browser edition (Data → Backup), so data moves between the editions.
+  Passwords, the AI key and the MCP token are never in a backup. Before a restore the current
+  data is saved to `backups/before-restore-<time>.zip`.
+- Requests from other websites (cross-site `Origin`) and unknown host names (DNS rebinding) are
+  refused. If you open the app by a domain name (e.g. behind a reverse proxy), allow it with
+  `SSB_ALLOW_HOSTS=name.example.com`.
+- The browser edition has no sign-in: its data never leaves the device.
 
 ## For phoneticians and speech-language pathologists (Analiza glasa)
 
@@ -158,7 +182,8 @@ storage, AudioWorklet, AI client and PWA files.
 ## Data directory
 Linux `~/.local/share/SterOidSoundBoard`, Windows `%APPDATA%\SterOidSoundBoard`:
 `boards/default.json` (autosave), `presets/`, `clinic_presets/`, `recordings/*.wav`, `clinic.json`
-(patients, sessions, recordings and annotations, AI opinions, clinic settings), `ai.json` (AI provider + key, owner-only), `audio.json`.
+(patients, sessions, recordings and annotations, AI opinions, clinic settings), `ai.json` (AI provider + key, owner-only), `audio.json`,
+`users.json` (users and password hashes, owner-only), `audit.jsonl` (change log), `mcp.json`, `backups/`.
 
 ## Roadmap
 - **0.2** ✅ DigiLingua mode, clinical nodes, recording, voice analysis, presets
@@ -168,7 +193,8 @@ Linux `~/.local/share/SterOidSoundBoard`, Windows `%APPDATA%\SterOidSoundBoard`:
 - **0.6** ✅ bilingual UI (HR / EN), English reports, exports and AI prompt
 - **0.7** ✅ browser edition (WebAssembly engine, local data folder or browser storage, PWA, Cloudflare Pages)
 - **0.8** ✅ clinical workstation (chart, SOAP sessions, protocols, GRBAS/CAPE-V, DSI), channel matrix, new filters and monitors, MCP for Claude/ChatGPT, free/local AI presets
-- **0.9** PIN/login for the desktop app's LAN access, native duplex backends (JACK/PipeWire, ASIO), Pisound support, state-preserving graph edits
+- **0.9** ✅ sign-in for the desktop app (users, roles, password/PIN), change log, backup/restore (shared format with the browser edition)
+- **0.9.x** native duplex backends (JACK/PipeWire, ASIO), Pisound support, state-preserving graph edits, AVQI
 - **0.10** LV2 plugin hosting + plugin manager (open-source plugin catalog)
 - **0.11** Control-surface designer (custom tablet layouts), MIDI learn, OSC
 - **0.12** AI Lab: describe an effect → Faust DSP generated, compiled (JIT) and loaded live

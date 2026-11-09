@@ -89,6 +89,8 @@ pub struct App {
     pub tap_view: Mutex<HashMap<u64, Vec<String>>>,
     /// MCP (AI assistants) settings and token.
     pub mcp: Mutex<crate::mcp::McpConfig>,
+    /// Users, sessions and the audit log.
+    pub auth: crate::auth::Auth,
 }
 
 struct TapState {
@@ -249,6 +251,7 @@ impl App {
         let (events, _) = broadcast::channel(256);
         let clinic = Clinic::load(&paths.clinic);
         let ai = AiConfig::load(&paths.ai);
+        let paths_data = paths.data.clone();
         Arc::new(App {
             inner: Mutex::new(Inner {
                 board,
@@ -274,6 +277,7 @@ impl App {
             taps: Mutex::new(HashMap::new()),
             tap_view: Mutex::new(HashMap::new()),
             mcp: Mutex::new(mcp),
+            auth: crate::auth::Auth::load(&paths_data),
         })
     }
 
@@ -510,6 +514,20 @@ impl App {
     }
 
     // ------------------------------------------------------------ clinic
+
+    /// Writes the clinic data as it is in memory (before a backup).
+    pub fn flush_clinic(&self) -> Result<()> {
+        let c = self.clinic.lock().unwrap();
+        c.save(&self.paths.clinic)
+    }
+
+    /// Reads the clinic data again from disk (after a restore) and drops cached analyses.
+    pub fn reload_clinic(&self) {
+        *self.clinic.lock().unwrap() = Clinic::load(&self.paths.clinic);
+        self.reports.lock().unwrap().clear();
+        self.tracks.lock().unwrap().clear();
+        self.emit(json!({"t": "clinic"}));
+    }
 
     pub fn save_clinic(&self, c: &Clinic) -> Result<()> {
         c.save(&self.paths.clinic)?;

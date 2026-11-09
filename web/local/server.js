@@ -296,6 +296,8 @@ const SsbServer = (() => {
   const routes = [];
   const R = (method, pattern, fn) => routes.push([method, new RegExp("^" + pattern.replace(/\{(\w+)\}/g, "(?<$1>[^/]+)") + "$"), fn]);
 
+  // the browser edition has no login: the data never leaves this device
+  R("GET", "/api/auth/me", () => ({ auth: false, user: null, local: true, admin: true, can_setup: false, edition: "web" }));
   R("GET", "/api/status", () => ({ version: VERSION, running: SsbAudio.info(), config: S.audioCfg, error: S.lastError, mute: S.mute, preset: S.current_preset, recording: !!S.recording, bypass_all: S.bypassAll, edition: "web" }));
   R("PUT", "/api/audio/routing", async (q) => {
     const r = E.call("routing_sanitized", q.body || {});

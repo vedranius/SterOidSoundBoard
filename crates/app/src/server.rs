@@ -11,6 +11,7 @@ use steroid_engine::*;
 use rust_embed::RustEmbed;
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
@@ -89,7 +90,18 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/ws", get(ws))
         .route("/mcp", post(mcp_http).get(|| async { StatusCode::METHOD_NOT_ALLOWED }).delete(|| async { StatusCode::METHOD_NOT_ALLOWED }))
         .route("/api/mcp/config", get(mcp_config).put(set_mcp_config))
+        .route("/api/auth/me", get(auth_me))
+        .route("/api/auth/login", post(auth_login))
+        .route("/api/auth/logout", post(auth_logout))
+        .route("/api/auth/setup", post(auth_setup))
+        .route("/api/auth/password", put(auth_password))
+        .route("/api/users", get(users_list).post(users_create))
+        .route("/api/users/{name}", put(users_update).delete(users_delete))
+        .route("/api/audit", get(audit_list))
+        .route("/api/backup", get(backup_download))
+        .route("/api/restore", post(backup_restore).layer(DefaultBodyLimit::max(1 << 30)))
         .fallback(static_file)
+        .layer(axum::middleware::from_fn_with_state(app.clone(), gate))
         .layer(axum::middleware::from_fn(lang_scope))
         .with_state(app)
 }
@@ -1136,8 +1148,10 @@ async fn set_mcp_config(State(app): S, Json(b): Json<McpIn>) -> Response {
 // ------------------------------------------------------------- WebSocket
 static CLIENT_ID: AtomicU64 = AtomicU64::new(1);
 
-async fn ws(State(app): S, up: WebSocketUpgrade) -> Response {
-    up.on_upgrade(move |s| client(app, s))
+async fn ws(State(app): S, axum::Extension(who): axum::Extension<Who>, up: WebSocketUpgrade) -> Response {
+    // without login, other devices get the audio part only (no AI text, no clinic events)
+    let clinical = who.user.is_some() || who.local;
+    up.on_upgrade(move |s| client(app, s, clinical))
 }
 
 #[derive(Deserialize)]
@@ -1156,7 +1170,7 @@ enum ClientMsg {
     Taps { #[serde(default)] ids: Vec<String> },
 }
 
-async fn client(app: Arc<App>, socket: WebSocket) {
+async fn client(app: Arc<App>, socket: WebSocket, clinical: bool) {
     let me = CLIENT_ID.fetch_add(1, Ordering::Relaxed);
     let (mut tx, mut rx) = socket.split();
     let mut events = app.events.subscribe();
@@ -1168,6 +1182,9 @@ async fn client(app: Arc<App>, socket: WebSocket) {
         loop {
             match events.recv().await {
                 Ok(m) => {
+                    if !clinical && is_clinical_event(&m) {
+                        continue;
+                    }
                     if tx.send(Message::Text(m.into())).await.is_err() {
                         break;
                     }
@@ -1236,4 +1253,420 @@ async fn static_file(uri: Uri) -> Response {
     };
     let mime = mime_guess::from_path(path).first_or_octet_stream();
     ([(header::CONTENT_TYPE, mime.as_ref().to_string())], file.data).into_response()
+}
+
+// ------------------------------------------------------------- login, roles, audit log
+
+/// Who sent a request: the signed-in user (if any), and whether it came from
+/// this computer. Put into every `/api` request by `gate`.
+#[derive(Clone)]
+pub struct Who {
+    pub user: Option<crate::auth::User>,
+    pub local: bool,
+    pub ip: IpAddr,
+}
+
+impl Who {
+    fn name(&self) -> String {
+        self.user.as_ref().map(|u| u.name.clone()).unwrap_or_else(|| if self.local { "local".into() } else { "remote".into() })
+    }
+    /// Administrators, and this computer while no user exists.
+    fn admin(&self, auth_on: bool) -> bool {
+        match &self.user {
+            Some(u) => u.is_admin(),
+            None => !auth_on && self.local,
+        }
+    }
+}
+
+/// Patient data and everything that can reveal or change it.
+const CLINICAL: [&str; 14] = [
+    "/api/patients", "/api/sessions", "/api/recordings", "/api/questionnaires", "/api/notes", "/api/ai", "/api/ai-reports",
+    "/api/clinic", "/api/record", "/api/mcp", "/api/users", "/api/audit", "/api/backup", "/api/restore",
+];
+
+fn under(path: &str, prefix: &str) -> bool {
+    path == prefix || path.strip_prefix(prefix).is_some_and(|r| r.starts_with('/'))
+}
+
+fn is_clinical(path: &str) -> bool {
+    CLINICAL.iter().any(|p| under(path, p))
+}
+
+fn is_admin_only(path: &str, method: &axum::http::Method) -> bool {
+    ["/api/users", "/api/audit", "/api/backup", "/api/restore", "/api/mcp/config"].iter().any(|p| under(path, p))
+        || (path == "/api/ai/config" && method != axum::http::Method::GET)
+}
+
+/// WebSocket events that carry clinical content.
+fn is_clinical_event(m: &str) -> bool {
+    serde_json::from_str::<Value>(m).ok().and_then(|v| v.get("t").and_then(|t| t.as_str()).map(|t| matches!(t, "ai_task" | "clinic" | "rec"))).unwrap_or(false)
+}
+
+fn cookie_token(h: &HeaderMap) -> Option<String> {
+    h.get_all(header::COOKIE).iter().filter_map(|v| v.to_str().ok()).flat_map(|v| v.split(';')).find_map(|kv| {
+        let (k, v) = kv.trim().split_once('=')?;
+        (k == crate::auth::COOKIE && !v.is_empty()).then(|| v.to_string())
+    })
+}
+
+fn host_name(host: &str) -> &str {
+    if let Some(rest) = host.strip_prefix('[') {
+        return rest.split(']').next().unwrap_or("");
+    }
+    host.rsplit_once(':').filter(|(_, p)| p.chars().all(|c| c.is_ascii_digit())).map(|(h, _)| h).unwrap_or(host)
+}
+
+/// The Host header names this machine: an IP address, `localhost`, a `.local`
+/// or single-label name, or a name allowed with `SSB_ALLOW_HOSTS`. Refusing
+/// other names stops DNS-rebinding pages from reaching the app.
+fn host_ok(h: &HeaderMap) -> bool {
+    let Some(host) = h.get(header::HOST).and_then(|v| v.to_str().ok()) else { return true };
+    let name = host_name(host).to_ascii_lowercase();
+    if name.parse::<IpAddr>().is_ok() || name == "localhost" || name.ends_with(".localhost") || name.ends_with(".local") || !name.contains('.') {
+        return true;
+    }
+    std::env::var("SSB_ALLOW_HOSTS").map(|v| v.split(',').any(|a| a.trim().eq_ignore_ascii_case(&name))).unwrap_or(false)
+}
+
+/// A browser request from another site (its Origin is not this host) is refused.
+fn origin_ok(h: &HeaderMap) -> bool {
+    let Some(origin) = h.get(header::ORIGIN).and_then(|v| v.to_str().ok()) else { return true };
+    let Some(host) = h.get(header::HOST).and_then(|v| v.to_str().ok()) else { return false };
+    origin.split_once("://").is_some_and(|(_, rest)| rest.trim_end_matches('/').eq_ignore_ascii_case(host))
+}
+
+fn deny(code: StatusCode, msg: String, extra: Value) -> Response {
+    let mut body = json!({"error": msg});
+    if let (Some(b), Some(e)) = (body.as_object_mut(), extra.as_object()) {
+        b.extend(e.clone());
+    }
+    (code, Json(body)).into_response()
+}
+
+async fn gate(State(app): S, mut req: axum::extract::Request, next: axum::middleware::Next) -> Response {
+    let path = req.uri().path().to_string();
+    if !(path.starts_with("/api/") || path == "/ws") {
+        return next.run(req).await; // the UI's files; /mcp checks its own token
+    }
+    if !host_ok(req.headers()) {
+        log::warn!("refused a request for an unknown host name: {:?}", req.headers().get(header::HOST));
+        return deny(StatusCode::FORBIDDEN, tr!("Nepoznato ime poslužitelja. Otvorite aplikaciju preko IP adrese ili dodajte ime u SSB_ALLOW_HOSTS.", "Unknown host name. Open the app by its IP address or add the name to SSB_ALLOW_HOSTS."), json!({}));
+    }
+    let method = req.method().clone();
+    let reads = method == axum::http::Method::GET || method == axum::http::Method::HEAD;
+    if (!reads || path == "/ws") && !origin_ok(req.headers()) {
+        let hv = |k| req.headers().get(k).and_then(|v: &axum::http::HeaderValue| v.to_str().ok()).unwrap_or("-").to_string();
+        log::warn!("refused a cross-site request to {path}: origin {} host {}", hv(header::ORIGIN), hv(header::HOST));
+        return deny(StatusCode::FORBIDDEN, tr!("Zahtjev s druge web stranice je odbijen.", "A request from another website was refused."), json!({}));
+    }
+    let ip = req.extensions().get::<axum::extract::ConnectInfo<SocketAddr>>().map(|c| c.0.ip()).unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST));
+    let ip = match ip {
+        IpAddr::V6(v6) => v6.to_ipv4_mapped().map(IpAddr::V4).unwrap_or(ip),
+        v4 => v4,
+    };
+    let local = ip.is_loopback();
+    let auth_on = app.auth.enabled();
+    let user = cookie_token(req.headers()).and_then(|t| app.auth.check(&t));
+    let public = under(&path, "/api/auth") && path != "/api/auth/password" || path == "/api/status";
+    if auth_on {
+        if user.is_none() && !public {
+            return deny(StatusCode::UNAUTHORIZED, tr!("Prijavite se.", "Please sign in."), json!({"login": true}));
+        }
+    } else if !local && is_clinical(&path) {
+        return deny(
+            StatusCode::FORBIDDEN,
+            tr!(
+                "Podaci pacijenata dostupni su samo na računalu na kojem aplikacija radi, dok se ne napravi prvi korisnik (gumb Prijava na tom računalu).",
+                "Patient data is only available on the computer the app runs on until the first user is created (Sign-in button on that computer)."
+            ),
+            json!({"setup": true}),
+        );
+    }
+    let who = Who { user, local, ip };
+    if is_admin_only(&path, &method) && !who.admin(auth_on) {
+        return deny(StatusCode::FORBIDDEN, tr!("Ovo smije samo administrator.", "Only an administrator may do this."), json!({}));
+    }
+    req.extensions_mut().insert(who.clone());
+    let res = next.run(req).await;
+    let read_only = ["/analyze", "/tracks", "/preview", "/summary"].iter().any(|s| path.ends_with(s)) || path == "/api/ai/test";
+    if !reads && res.status().is_success() && is_clinical(&path) && !read_only && !under(&path, "/api/auth") && !under(&path, "/api/users") && path != "/api/restore" {
+        app.auth.audit(&who.name(), &ip.to_string(), method.as_str(), &path);
+    }
+    res
+}
+
+fn session_cookie(token: &str) -> String {
+    format!("{}={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age={}", crate::auth::COOKIE, crate::auth::MAX_AGE.as_secs())
+}
+
+fn with_cookie(cookie: String, body: Value) -> Response {
+    ([(header::SET_COOKIE, cookie), (header::CACHE_CONTROL, "no-store".to_string())], Json(body)).into_response()
+}
+
+type W = axum::Extension<Who>;
+
+async fn auth_me(State(app): S, axum::Extension(who): W) -> Json<Value> {
+    let on = app.auth.enabled();
+    Json(json!({
+        "auth": on,
+        "user": who.user.as_ref().map(|u| u.public()),
+        "local": who.local,
+        "admin": who.admin(on),
+        "can_setup": !on && who.local,
+        "edition": "desktop",
+    }))
+}
+
+#[derive(Deserialize)]
+struct LoginIn {
+    name: String,
+    secret: String,
+}
+
+async fn auth_login(State(app): S, axum::Extension(who): W, Json(b): Json<LoginIn>) -> Response {
+    let ip = who.ip;
+    let a = app.clone();
+    let name = b.name.clone();
+    match crate::i18n::blocking(move || a.auth.login(&b.name, &b.secret, ip)).await {
+        Ok(Ok((u, token))) => {
+            app.auth.audit(&u.name, &ip.to_string(), "login", "");
+            with_cookie(session_cookie(&token), json!({"user": u.public()}))
+        }
+        Ok(Err(e)) => {
+            app.auth.audit(&crate::auth::clean_name(&name).unwrap_or_else(|_| "?".into()), &ip.to_string(), "login_failed", "");
+            deny(StatusCode::UNAUTHORIZED, e.to_string(), json!({}))
+        }
+        Err(e) => err(e),
+    }
+}
+
+async fn auth_logout(State(app): S, axum::Extension(who): W, h: HeaderMap) -> Response {
+    if let Some(t) = cookie_token(&h) {
+        app.auth.logout(&t);
+        app.auth.audit(&who.name(), &who.ip.to_string(), "logout", "");
+    }
+    with_cookie(format!("{}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0", crate::auth::COOKIE), json!({"ok": true}))
+}
+
+#[derive(Deserialize)]
+struct UserIn {
+    name: String,
+    #[serde(default)]
+    display: String,
+    #[serde(default)]
+    role: String,
+    secret: String,
+}
+
+/// The first user (an administrator), from this computer only.
+async fn auth_setup(State(app): S, axum::Extension(who): W, Json(b): Json<UserIn>) -> Response {
+    if app.auth.enabled() || !who.local {
+        return deny(StatusCode::FORBIDDEN, tr!("Prvi korisnik se može napraviti samo na računalu na kojem aplikacija radi.", "The first user can only be created on the computer the app runs on."), json!({}));
+    }
+    let a = app.clone();
+    match crate::i18n::blocking(move || a.auth.create(&b.name, &b.display, "admin", &b.secret)).await {
+        Ok(Ok(u)) => {
+            app.auth.audit(&u.name, &who.ip.to_string(), "user_create", &u.name);
+            let token = app.auth.session_for(&u.name);
+            with_cookie(session_cookie(&token), json!({"user": u.public()}))
+        }
+        Ok(Err(e)) => err(e),
+        Err(e) => err(e),
+    }
+}
+
+#[derive(Deserialize)]
+struct PasswordIn {
+    old: String,
+    secret: String,
+}
+
+/// Signed-in users change their own password or PIN (the old one is checked).
+async fn auth_password(State(app): S, axum::Extension(who): W, h: HeaderMap, Json(b): Json<PasswordIn>) -> Response {
+    let Some(u) = who.user.clone() else { return deny(StatusCode::UNAUTHORIZED, tr!("Prijavite se.", "Please sign in."), json!({"login": true})) };
+    let a = app.clone();
+    let keep = cookie_token(&h);
+    let ip = who.ip;
+    let r = crate::i18n::blocking(move || -> anyhow::Result<()> {
+        a.auth.login(&u.name, &b.old, ip).map_err(|_| anyhow::anyhow!(tr!("Stara lozinka nije točna.", "The old password is wrong.")))?;
+        a.auth.update(&u.name, None, None, Some(&b.secret), None)?;
+        Ok(())
+    })
+    .await;
+    match r {
+        Ok(Ok(())) => {
+            // the password change ended every session of the user: start a new one here
+            let name = who.user.as_ref().map(|u| u.name.clone()).unwrap_or_default();
+            if let Some(t) = keep {
+                app.auth.logout(&t);
+            }
+            app.auth.audit(&name, &who.ip.to_string(), "password_change", &name);
+            let token = app.auth.session_for(&name);
+            with_cookie(session_cookie(&token), json!({"ok": true}))
+        }
+        Ok(Err(e)) => err(e),
+        Err(e) => err(e),
+    }
+}
+
+async fn users_list(State(app): S) -> Json<Value> {
+    Json(json!(app.auth.list()))
+}
+
+async fn users_create(State(app): S, axum::Extension(who): W, Json(b): Json<UserIn>) -> Response {
+    let a = app.clone();
+    match crate::i18n::blocking(move || a.auth.create(&b.name, &b.display, &b.role, &b.secret)).await {
+        Ok(Ok(u)) => {
+            app.auth.audit(&who.name(), &who.ip.to_string(), "user_create", &u.name);
+            Json(u.public()).into_response()
+        }
+        Ok(Err(e)) => err(e),
+        Err(e) => err(e),
+    }
+}
+
+#[derive(Deserialize)]
+struct UserEdit {
+    display: Option<String>,
+    role: Option<String>,
+    secret: Option<String>,
+    disabled: Option<bool>,
+}
+
+async fn users_update(State(app): S, axum::Extension(who): W, Path(name): Path<String>, Json(b): Json<UserEdit>) -> Response {
+    let a = app.clone();
+    let n = name.clone();
+    let r = crate::i18n::blocking(move || a.auth.update(&n, b.display.as_deref(), b.role.as_deref(), b.secret.as_deref().filter(|s| !s.is_empty()), b.disabled)).await;
+    match r {
+        Ok(Ok(u)) => {
+            app.auth.audit(&who.name(), &who.ip.to_string(), "user_update", &name);
+            Json(u.public()).into_response()
+        }
+        Ok(Err(e)) => err(e),
+        Err(e) => err(e),
+    }
+}
+
+async fn users_delete(State(app): S, axum::Extension(who): W, Path(name): Path<String>) -> Response {
+    if who.user.as_ref().is_some_and(|u| u.name == name) {
+        return err(tr!("Ne možete obrisati sami sebe.", "You cannot delete yourself."));
+    }
+    match app.auth.delete(&name) {
+        Ok(()) => {
+            app.auth.audit(&who.name(), &who.ip.to_string(), "user_delete", &name);
+            StatusCode::NO_CONTENT.into_response()
+        }
+        Err(e) => err(e),
+    }
+}
+
+#[derive(Deserialize)]
+struct AuditQ {
+    limit: Option<usize>,
+}
+
+async fn audit_list(State(app): S, Query(q): Query<AuditQ>) -> Json<Value> {
+    Json(json!(app.auth.audit_tail(q.limit.unwrap_or(500).min(5000))))
+}
+
+async fn backup_download(State(app): S, axum::Extension(who): W) -> Response {
+    let a = app.clone();
+    let (path, n) = match crate::i18n::blocking(move || a.backup_for_download()).await {
+        Ok(Ok(v)) => v,
+        Ok(Err(e)) => return err(e),
+        Err(e) => return err(e),
+    };
+    app.auth.audit(&who.name(), &who.ip.to_string(), "backup", &format!("{n} files"));
+    let file = match tokio::fs::File::open(&path).await {
+        Ok(f) => f,
+        Err(e) => return err(e),
+    };
+    let len = file.metadata().await.map(|m| m.len()).unwrap_or(0);
+    let date = chrono_date();
+    let body = axum::body::Body::from_stream(tokio_util::io::ReaderStream::new(file));
+    (
+        [
+            (header::CONTENT_TYPE, "application/zip".to_string()),
+            (header::CONTENT_LENGTH, len.to_string()),
+            (header::CONTENT_DISPOSITION, format!("attachment; filename=\"SterOidSoundBoard_{date}.zip\"")),
+            (header::CACHE_CONTROL, "no-store".to_string()),
+        ],
+        body,
+    )
+        .into_response()
+}
+
+/// Today's date as YYYY-MM-DD (UTC), for file names.
+fn chrono_date() -> String {
+    let days = (crate::auth::now() / 86400) as i64;
+    // civil-from-days (Howard Hinnant)
+    let z = days + 719468;
+    let era = z.div_euclid(146097);
+    let doe = z.rem_euclid(146097);
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + i64::from(m <= 2);
+    format!("{y:04}-{m:02}-{d:02}")
+}
+
+async fn backup_restore(State(app): S, axum::Extension(who): W, body: axum::body::Bytes) -> Response {
+    let a = app.clone();
+    match crate::i18n::blocking(move || a.restore_zip(&body)).await {
+        Ok(Ok((n, safety))) => {
+            app.auth.audit(&who.name(), &who.ip.to_string(), "restore", &format!("{n} files; before: {safety}"));
+            Json(json!({"files": n, "safety_copy": safety})).into_response()
+        }
+        Ok(Err(e)) => err(e),
+        Err(e) => err(e),
+    }
+}
+
+#[cfg(test)]
+mod gate_tests {
+    use super::*;
+
+    fn h(pairs: &[(&'static str, &str)]) -> HeaderMap {
+        let mut m = HeaderMap::new();
+        for (k, v) in pairs {
+            m.append(*k, v.parse().unwrap());
+        }
+        m
+    }
+
+    #[test]
+    fn clinical_paths_and_admin_paths() {
+        assert!(is_clinical("/api/patients"));
+        assert!(is_clinical("/api/patients/p1/chart"));
+        assert!(is_clinical("/api/ai-reports/x"));
+        assert!(is_clinical("/api/record/start"));
+        assert!(!is_clinical("/api/recordingsx"));
+        assert!(!is_clinical("/api/board"));
+        assert!(!is_clinical("/api/presets"));
+        assert!(!is_clinical("/api/audio/start"));
+        assert!(is_admin_only("/api/users/ana", &axum::http::Method::PUT));
+        assert!(is_admin_only("/api/ai/config", &axum::http::Method::PUT));
+        assert!(!is_admin_only("/api/ai/config", &axum::http::Method::GET));
+        assert!(!is_admin_only("/api/patients", &axum::http::Method::POST));
+    }
+
+    #[test]
+    fn hosts_origins_cookies() {
+        for ok in ["127.0.0.1:8420", "localhost:8420", "192.168.1.20:8420", "[::1]:8420", "raspberrypi.local:8420", "studio:8420", "10.0.0.2"] {
+            assert!(host_ok(&h(&[("host", ok)])), "{ok}");
+        }
+        assert!(!host_ok(&h(&[("host", "evil.example.com:8420")])));
+        assert!(origin_ok(&h(&[("host", "192.168.1.20:8420")])), "no Origin: not a cross-site browser request");
+        assert!(origin_ok(&h(&[("host", "192.168.1.20:8420"), ("origin", "http://192.168.1.20:8420")])));
+        assert!(!origin_ok(&h(&[("host", "127.0.0.1:8420"), ("origin", "https://evil.example.com")])));
+        assert!(!origin_ok(&h(&[("host", "127.0.0.1:8420"), ("origin", "null")])));
+        assert_eq!(cookie_token(&h(&[("cookie", "a=1; ssb_session=abc; b=2")])).as_deref(), Some("abc"));
+        assert_eq!(cookie_token(&h(&[("cookie", "ssb_session=")])), None);
+        assert!(is_clinical_event(r#"{"t":"ai_task","text":"x"}"#));
+        assert!(!is_clinical_event(r#"{"t":"param"}"#));
+        assert!(chrono_date().len() == 10);
+    }
 }
